@@ -41,12 +41,12 @@ def read_first_line(cmd):
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     stdout = p.communicate()[0]
     line = stdout.splitlines()[0]
-    return line
+    return line.decode("utf-8")
 
 sysname = os.uname()[0].lower()
 machine = platform.machine()
 bits = ARGUMENTS.get('bits', platform.architecture()[0])
-print('Host: ' + sysname + ' ' + machine + ' ' + bits)
+print(('Host: ' + sysname + ' ' + machine + ' ' + bits))
 
 x86 = any(arch in machine for arch in [ 'x86', 'amd64', 'i686', 'i386', 'i86pc' ])
 
@@ -162,7 +162,7 @@ if GALERA_REV == "XXXX" and os.path.isfile("GALERA_REVISION"):
 
 # export to any module that might have use of those
 Export('GALERA_VER', 'GALERA_REV')
-print('Signature: version: ' + GALERA_VER + ', revision: ' + GALERA_REV)
+print(('Signature: version: ' + GALERA_VER + ', revision: ' + GALERA_REV))
 
 LIBBOOST_PROGRAM_OPTIONS_A = ARGUMENTS.get('bpostatic', '')
 LIBBOOST_SYSTEM_A = LIBBOOST_PROGRAM_OPTIONS_A.replace('boost_program_options', 'boost_system')
@@ -197,10 +197,10 @@ if link != 'default':
 cc_version = read_first_line(env['CC'].split() + ['--version'])
 cxx_version = read_first_line(env['CXX'].split() + ['--version'])
 
-print('Using C compiler executable: ' + env['CC'])
-print('C compiler version is: ' + cc_version)
-print('Using C++ compiler executable: ' + env['CXX'])
-print('C++ compiler version is: ' + cxx_version)
+print('Using C compiler executable: ', env['CC'])
+print('C compiler version is: ', cc_version)
+print('Using C++ compiler executable: ', env['CXX'])
+print('C++ compiler version is: ', cxx_version)
 
 # Initialize CPPFLAGS and LIBPATH from environment to get user preferences
 env.Replace(CPPFLAGS  = os.getenv('CPPFLAGS', ''))
@@ -472,7 +472,7 @@ if boost == 1:
     def check_boost_library(libBaseName, header, configuredLibPath, autoadd = 1):
         libName = libBaseName + boost_library_suffix
         if configuredLibPath != '' and not os.path.isfile(configuredLibPath):
-            print("Error: file '%s' does not exist" % configuredLibPath)
+            print(("Error: file '%s' does not exist" % configuredLibPath))
             Exit(1)
         if configuredLibPath == '':
            for libpath in boost_libpaths:
@@ -482,7 +482,7 @@ if boost == 1:
                    break
         if configuredLibPath != '':
             if not conf.CheckCXXHeader(header):
-                print("Error: header '%s' does not exist" % header)
+                print(("Error: header '%s' does not exist" % header))
                 Exit (1)
             if autoadd:
                 conf.env.Append(LIBS=File(configuredLibPath))
@@ -493,7 +493,7 @@ if boost == 1:
                                            header=header,
                                            language='CXX',
                                            autoadd=autoadd):
-                print('Error: library %s does not exist' % libName)
+                print(('Error: library %s does not exist' % libName))
                 Exit (1)
             return [libName]
 
@@ -573,7 +573,7 @@ env = conf.Finish()
 
 print('Global flags:')
 for f in ['CFLAGS', 'CXXFLAGS', 'CCFLAGS', 'CPPFLAGS']:
-    print(f + ': ' + env[f].strip())
+    print((f + ': ' + env[f].strip()))
 
 Export('x86', 'bits', 'env', 'sysname', 'machine', 'libboost_program_options')
 
