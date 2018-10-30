@@ -52,20 +52,42 @@ galera::ServiceThd::thd_func (void* arg)
         {
             if (data.act_ & A_LAST_COMMITTED)
             {
-                ssize_t const ret
-                    (st->gcs_.set_last_applied(data.last_committed_));
+                static const size_t max_set_attempts(4);
+                size_t attempts = 0;
+                ssize_t ret;
 
-                if (gu_unlikely(ret < 0))
+                do
+                {
+                    ret = st->gcs_.set_last_applied(data.last_committed_);
+
+                    if (gu_likely(ret != -EINTR))
+                    {
+                        break;
+                    }
+
+                    attempts++;
+
+                    // gcs_set_last_applied() may return EINTR if the send
+                    // monitor was interruped, this is not an error and
+                    // in this case there is no need to display a warning:
+                    log_debug << "Reporting of last committed was "
+                                 "interrupted: "
+                              << data.last_committed_
+                              << "\nRetrying " << attempts << "th time";
+                }
+                while (attempts != max_set_attempts);
+
+                if (gu_likely(ret >= 0))
+                {
+                    log_debug << "Reported last committed: "
+                              << data.last_committed_;
+                }
+                else
                 {
                     log_warn << "Failed to report last committed "
                              << data.last_committed_ << ", " << ret
                              << " (" << strerror (-ret) << ')';
                     // @todo: figure out what to do in this case
-                }
-                else
-                {
-                    log_debug << "Reported last committed: "
-                              << data.last_committed_;
                 }
             }
 

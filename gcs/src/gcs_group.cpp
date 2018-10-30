@@ -255,7 +255,7 @@ group_check_donor (gcs_group_t* group)
         gu_warn ("Donor %s is no longer in the group. State transfer cannot "
                  "be completed, need to abort. Aborting...", donor_id);
 
-        gu_abort();
+        // gu_abort();
     }
 
     return;
@@ -342,6 +342,8 @@ group_post_state_exchange (gcs_group_t* group)
         }
 
         assert (group->prim_num > 0);
+
+        group_redo_last_applied(group);
     }
     else {
         // non-primary configuration
@@ -757,9 +759,15 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
                 }
             }
             else {
-                gu_info ("%d.%d (%s): State transfer %s %d.%d (%s) complete.",
-                         sender_idx, sender->segment, sender->name, st_dir,
-                         peer_idx, peer ? peer->segment : -1, peer_name);
+                if (GCS_NODE_STATE_JOINED == sender->status) {
+                    gu_info ("%d.%d (%s): State transfer %s %d.%d (%s) complete.",
+                             sender_idx, sender->segment, sender->name, st_dir,
+                             peer_idx, peer ? peer->segment : -1, peer_name);
+                }
+                else {
+                    assert(sender->desync_count > 0);
+                    return 0; // don't deliver up
+                }
             }
         }
     }

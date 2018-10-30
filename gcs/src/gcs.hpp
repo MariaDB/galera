@@ -280,9 +280,11 @@ extern long gcs_resume_recv (gcs_conn_t* conn);
  * After action with this seqno is applied, this thread is guaranteed to see
  * all the changes made by the client, even on other nodes.
  *
- * @return global sequence number or negative error code
+ * @retval 0       success
+ * @retval -EPERM  operation not permitted (in NON_PRIMARY state)
+ * @retval -EAGAIN operation may be retried later (in transient state)
  */
-extern gcs_seqno_t gcs_caused(gcs_conn_t* conn);
+extern long gcs_caused (gcs_conn_t* conn, gcs_seqno_t& seqno);
 
 /*! @brief Sends state transfer request
  * Broadcasts state transfer request which will be passed to one of the
@@ -450,6 +452,8 @@ extern void gcs_get_stats (gcs_conn_t *conn, struct gcs_stats* stats);
 extern void gcs_flush_stats(gcs_conn_t *conn);
 
 void gcs_get_status(gcs_conn_t* conn, gu::Status& status);
+
+extern void gcs_join_notification(gcs_conn_t *conn);
 
 /*! A node with this name will be treated as a stateless arbitrator */
 #define GCS_ARBITRATOR_NAME "garb"

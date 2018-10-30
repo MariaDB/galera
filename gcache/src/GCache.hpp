@@ -99,6 +99,14 @@ namespace gcache
                                    int64_t& seqno_d,
                                    ssize_t& size);
 
+        /*!
+         * Implements the cleanup policy test.
+         */
+        bool cleanup_required()
+        {
+            return (params.keep_pages_size() && ps.total_size() > params.keep_pages_size());
+        }
+
         class Buffer
         {
         public:

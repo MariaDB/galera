@@ -164,7 +164,7 @@ galera::ReplicatorSMM::ReplicatorSMM(const struct wsrep_init_args* args)
     ist_receiver_       (config_, slave_pool_, args->node_address),
     ist_senders_        (gcs_, gcache_),
     wsdb_               (),
-    cert_               (config_, service_thd_),
+    cert_               (config_, service_thd_, gcache_),
     local_monitor_      (),
     apply_monitor_      (),
     commit_monitor_     (),
@@ -859,8 +859,8 @@ wsrep_status_t galera::ReplicatorSMM::replay_trx(TrxHandle* trx, void* trx_ctx)
         ApplyOrder ao(*trx);
         gu_trace(apply_monitor_.enter(ao));
         trx->set_state(TrxHandle::S_MUST_REPLAY_CM);
-        // fall through
     }
+    // fall through
     case TrxHandle::S_MUST_REPLAY_CM:
         if (co_mode_ != CommitOrder::BYPASS)
         {
@@ -895,6 +895,13 @@ wsrep_status_t galera::ReplicatorSMM::replay_trx(TrxHandle* trx, void* trx_ctx)
         catch (gu::Exception& e)
         {
             st_.mark_corrupt();
+
+            /* Before doing a graceful exit ensure that node isolate itself
+            from the cluster. This will cause the quorum to re-evaluate
+            and if minority nodes are left with different set of data
+            they can turn non-Primary to avoid further data consistency issue. */
+            param_set("gmcast.isolate", "1");
+
             throw;
         }
 
@@ -967,12 +974,19 @@ wsrep_status_t galera::ReplicatorSMM::post_rollback(TrxHandle* trx)
 
 wsrep_status_t galera::ReplicatorSMM::causal_read(wsrep_gtid_t* gtid)
 {
-    wsrep_seqno_t cseq(static_cast<wsrep_seqno_t>(gcs_.caused()));
+    wsrep_seqno_t cseq;
+    gu::datetime::Date wait_until(gu::datetime::Date::calendar() +
+                                  causal_read_timeout_);
 
-    if (cseq < 0)
+    try
     {
-        log_warn << "gcs_caused() returned " << cseq << " (" << strerror(-cseq)
-                 << ')';
+        gcs_.caused(cseq, wait_until);
+        assert(cseq >= 0);
+    }
+    catch (gu::Exception& e)
+    {
+        log_warn << "gcs_caused() returned " << -e.get_errno()
+                 << " (" << strerror(e.get_errno()) << ")";
         return WSREP_TRX_FAIL;
     }
 
@@ -985,8 +999,6 @@ wsrep_status_t galera::ReplicatorSMM::causal_read(wsrep_gtid_t* gtid)
         // at monitor drain and disallowing further waits until
         // configuration change related operations (SST etc) have been
         // finished.
-        gu::datetime::Date wait_until(gu::datetime::Date::calendar()
-                                      + causal_read_timeout_);
         if (gu_likely(co_mode_ != CommitOrder::BYPASS))
         {
             commit_monitor_.wait(cseq, wait_until);
@@ -1198,6 +1210,13 @@ galera::ReplicatorSMM::sst_sent(const wsrep_gtid_t& state_id, int const rcode)
     if (state_() != S_DONOR)
     {
         log_error << "sst sent called when not SST donor, state " << state_();
+        /* If sst_sent() fails node should restore itself back to the joined
+        state. The sst_sent function can fail. commonly due to network errors,
+        where DONOR may lose connectivity to JOINER (or existing cluster).
+        But on re-join it should restore the original state without waiting
+        for transition to JOINER state (DONOR->JOINER->JOINED->SYNCED).
+        SST failure on JOINER will gracefully shutdown the joiner.*/
+        gcs_.join_notification();
         return WSREP_CONN_FAIL;
     }
 
@@ -1247,7 +1266,14 @@ void galera::ReplicatorSMM::process_trx(void* recv_ctx, TrxHandle* trx)
 
             log_fatal << "Failed to apply trx: " << *trx;
             log_fatal << e.what();
-            log_fatal << "Node consistency compromized, aborting...";
+            log_fatal << "Node consistency compromised, aborting...";
+
+            /* Before doing a graceful exit ensure that node isolate itself
+            from the cluster. This will cause the quorum to re-evaluate
+            and if minority nodes are left with different set of data
+            they can turn non-Primary to avoid further data consistency issue. */
+            param_set("gmcast.isolate", "1");
+
             abort();
         }
         break;
@@ -1412,6 +1438,12 @@ galera::ReplicatorSMM::process_conf_change(void*                    recv_ctx,
     size_t app_req_len(0);
 
     const_cast<wsrep_view_info_t&>(view_info).state_gap = st_required;
+
+    // We need to set the protocol version BEFORE the view callback, so that
+    // any version-dependent code is run using the correct version instead of -1.
+    if (view_info.view >= 0) // Primary configuration
+        establish_protocol_versions (repl_proto);
+
     wsrep_cb_status_t const rcode(
         view_cb_(app_ctx_, recv_ctx, &view_info, 0, 0, &app_req, &app_req_len));
 
@@ -1420,6 +1452,7 @@ galera::ReplicatorSMM::process_conf_change(void*                    recv_ctx,
         assert(app_req_len <= 0);
         log_fatal << "View callback failed. This is unrecoverable, "
                   << "restart required.";
+        local_monitor_.leave(lo);
         close();
         abort();
     }
@@ -1428,14 +1461,13 @@ galera::ReplicatorSMM::process_conf_change(void*                    recv_ctx,
         log_fatal << "Local state UUID " << state_uuid_
                   << " is different from group state UUID " << group_uuid
                   << ", and SST request is null: restart required.";
+        local_monitor_.leave(lo);
         close();
         abort();
     }
 
     if (view_info.view >= 0) // Primary configuration
     {
-        establish_protocol_versions (repl_proto);
-
         // we have to reset cert initial position here, SST does not contain
         // cert index yet (see #197).
         // Also this must be done before releasing GCache buffers.
@@ -1528,6 +1560,7 @@ galera::ReplicatorSMM::process_conf_change(void*                    recv_ctx,
         {
             log_fatal << "Internal error: unexpected next state for "
                       << "non-prim: " << next_state << ". Restart required.";
+            local_monitor_.leave(lo);
             close();
             abort();
         }
@@ -1870,6 +1903,6 @@ galera::ReplicatorSMM::update_state_uuid (const wsrep_uuid_t& uuid)
 void
 galera::ReplicatorSMM::abort()
 {
-    gcs_.close();
+    close();
     gu_abort();
 }
