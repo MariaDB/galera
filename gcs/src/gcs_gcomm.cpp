@@ -223,7 +223,7 @@ public:
 
         error_ = ENOTCONN;
         int err;
-        if ((err = pthread_create(&thd_, 0, &run_fn, this)) != 0)
+        if ((err = gu_thread_create(&thd_, 0, &run_fn, this)) != 0)
         {
             gu_throw_error(err) << "Failed to create thread";
         }
@@ -301,11 +301,18 @@ public:
         pthread_join(thd_, 0);
         {
             gcomm::Critical<Protonet> crit(*net_);
-            log_info << "gcomm: closing backend";
-            tp_->close(error_ != 0 || force == true);
-            gcomm::disconnect(tp_, this);
-            delete tp_;
-            tp_ = 0;
+            if (tp_ == 0)
+            {
+                log_info << "gcomm: backend already closed";
+            }
+            else
+            {
+                log_info << "gcomm: closing backend";
+                tp_->close(error_ != 0 || force == true);
+                gcomm::disconnect(tp_, this);
+                delete tp_;
+                tp_ = 0;
+            }
         }
         const Message* msg;
 
@@ -704,6 +711,7 @@ static GCS_BACKEND_RECV_FN(gcomm_recv)
             if (cm_size <= msg->buf_len)
             {
                 memcpy(msg->buf, cm, cm_size);
+                msg->size = cm_size;
                 recv_buf.pop_front();
                 msg->type = GCS_MSG_COMPONENT;
             }

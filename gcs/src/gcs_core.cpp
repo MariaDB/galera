@@ -97,6 +97,7 @@ core_act_t;
 typedef struct causal_act
 {
     gcs_seqno_t* act_id;
+    long*        error;
     gu_mutex_t*  mtx;
     gu_cond_t*   cond;
 } causal_act_t;
@@ -677,12 +678,18 @@ core_handle_last_msg (gcs_core_t*          core,
             gcs_group_handle_last_msg (&core->group, msg);
         if (commit_cut) {
             /* commit cut changed */
-            if ((act->buf = malloc (sizeof (commit_cut)))) {
-                act->type                 = GCS_ACT_COMMIT_CUT;
+
+            int   const buf_len(sizeof(commit_cut));
+            void* const buf(malloc(buf_len));
+
+            if (gu_likely(NULL != (buf))) {
                 /* #701 - everything that goes into the action buffer
                  *        is expected to be serialized. */
-                *((gcs_seqno_t*)act->buf) = gcs_seqno_htog(commit_cut);
-                act->buf_len              = sizeof(commit_cut);
+                *((gcs_seqno_t*)buf) = gcs_seqno_htog(commit_cut);
+                assert(NULL == act->buf);
+                act->buf     = buf;
+                act->buf_len = buf_len;
+                act->type    = GCS_ACT_COMMIT_CUT;
                 return act->buf_len;
             }
             else {
@@ -812,6 +819,7 @@ core_handle_comp_msg (gcs_core_t*          core,
                   "WAIT_STATE_MSG. Can't continue.");
         ret = -ENOTRECOVERABLE;
         assert(0);
+        // fall through
     default:
         gu_fatal ("Failed to handle component message: %d (%s)!",
                   ret, strerror (-ret));
@@ -1021,23 +1029,33 @@ core_msg_to_action (gcs_core_t*          core,
 static long core_msg_causal(gcs_core_t* conn,
                             struct gcs_recv_msg* msg)
 {
-    causal_act_t* act;
-    if (gu_unlikely(msg->size != sizeof(*act)))
+    if (gu_unlikely(msg->size != sizeof(causal_act_t)))
     {
         gu_error("invalid causal act len %ld, expected %ld",
-                 msg->size, sizeof(*act));
+                 msg->size, sizeof(causal_act_t));
         return -EPROTO;
     }
 
-    gcs_seqno_t const causal_seqno =
-        GCS_GROUP_PRIMARY == conn->group.state ?
-        conn->group.act_id_ : GCS_SEQNO_ILL;
-
-    act = (causal_act_t*)msg->buf;
+    causal_act_t* act= (causal_act_t*)msg->buf;
     gu_mutex_lock(act->mtx);
-    *act->act_id = causal_seqno;
-    gu_cond_signal(act->cond);
+    {
+        switch (conn->group.state)
+        {
+        case GCS_GROUP_PRIMARY:
+            *act->act_id = conn->group.act_id_;
+            break;
+        case GCS_GROUP_WAIT_STATE_UUID:
+        case GCS_GROUP_WAIT_STATE_MSG:
+            *act->error = -EAGAIN;
+            break;
+        default:
+            *act->error = -EPERM;
+        }
+
+        gu_cond_signal(act->cond);
+    }
     gu_mutex_unlock(act->mtx);
+
     return msg->size;
 }
 
@@ -1324,20 +1342,22 @@ gcs_core_send_fc (gcs_core_t* core, const void* fc, size_t fc_size)
     return ret;
 }
 
-gcs_seqno_t
-gcs_core_caused(gcs_core_t* core)
+long
+gcs_core_caused (gcs_core_t* core, gcs_seqno_t& seqno)
 {
-    long         ret;
-    gcs_seqno_t  act_id = GCS_SEQNO_ILL;
+    long         error = 0;
     gu_mutex_t   mtx;
     gu_cond_t    cond;
-    causal_act_t act = {&act_id, &mtx, &cond};
+    causal_act_t act = {&seqno, &error, &mtx, &cond};
 
     gu_mutex_init (&mtx, NULL);
     gu_cond_init  (&cond, NULL);
     gu_mutex_lock (&mtx);
     {
-        ret = core_msg_send_retry (core, &act, sizeof(act), GCS_MSG_CAUSAL);
+        long ret = core_msg_send_retry (core,
+                                        &act,
+                                        sizeof(act),
+                                        GCS_MSG_CAUSAL);
 
         if (ret == sizeof(act))
         {
@@ -1346,14 +1366,14 @@ gcs_core_caused(gcs_core_t* core)
         else
         {
             assert (ret < 0);
-            act_id = ret;
+            error = ret;
         }
     }
     gu_mutex_unlock  (&mtx);
     gu_mutex_destroy (&mtx);
     gu_cond_destroy  (&cond);
 
-    return act_id;
+    return error;
 }
 
 long
