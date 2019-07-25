@@ -11,19 +11,22 @@ Build-Depends: check,
                libssl-dev,
                scons (>= 2)
 Homepage: http://www.galeracluster.com/
-Vcs-Browser: https://salsa.debian.org/mariadb-team/galera-3
-Vcs-Git: https://salsa.debian.org/mariadb-team/galera-3.git
+Vcs-Browser: https://salsa.debian.org/mariadb-team/galera-4
+Vcs-Git: https://salsa.debian.org/mariadb-team/galera-4.git
 
-Package: galera-3
+Package: galera-4
 Architecture: any
 Section: libs
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Conflicts: garbd-2,
+Conflicts: galera-3,
+           garbd-2,
            garbd2,
            percona-galera-3,
+           percona-galera-4,
            percona-xtradb-cluster-galera,
            percona-xtradb-cluster-galera-2.x,
            percona-xtradb-cluster-galera-3.x,
+           percona-xtradb-cluster-galera-4.x,
            percona-xtradb-cluster-garbd-2.x,
            percona-xtradb-cluster-garbd-3.x
 Provides: galera, galera3, percona-xtradb-cluster-galera-25, wsrep

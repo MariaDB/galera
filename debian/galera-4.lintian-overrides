@@ -1,2 +1,2 @@
 # Upstream recommends against LFS support at the moment, see https://github.com/codership/galera/issues/379
-galera-3: binary-file-built-without-LFS-support usr/lib/galera/libgalera_smm.so
+galera-4: binary-file-built-without-LFS-support usr/lib/galera/libgalera_smm.so
