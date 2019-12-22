@@ -1,4 +1,4 @@
-Source: galera-3
+Source: galera-4
 Maintainer: Debian MySQL Maintainers <pkg-mysql-maint@lists.alioth.debian.org>
 Uploaders: Otto Kekäläinen <otto@debian.org>
 Section: database
