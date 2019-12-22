@@ -36,9 +36,9 @@ index d579b3e..7d1e248 100644
          NULL
 --- a/gcs/src/unit_tests/SConscript
 +++ b/gcs/src/unit_tests/SConscript
-@@ -41,7 +41,6 @@ gcs_tests_sources = Split('''
-                              gcs_group_test.cpp
+@@ -45,7 +45,6 @@ gcs_tests_sources = Split('''
                               gcs_memb_test.cpp
+                              ../gcs_code_msg.cpp
                               ../gcs_group.cpp
 -                             gcs_core_test.cpp
                               ../gcs_core.cpp
@@ -46,16 +46,16 @@ index d579b3e..7d1e248 100644
                               ../gcs_msg_type.cpp
 --- a/gcs/src/unit_tests/gcs_tests.cpp
 +++ b/gcs/src/unit_tests/gcs_tests.cpp
-@@ -20,7 +20,6 @@
- #include "gcs_memb_test.hpp"
+@@ -21,7 +21,6 @@
+ #include "gcs_act_cchange_test.hpp"
  #include "gcs_group_test.hpp"
  #include "gcs_backend_test.hpp"
 -#include "gcs_core_test.hpp"
  #include "gcs_fc_test.hpp"
  
  typedef Suite *(*suite_creator_t)(void);
-@@ -37,7 +36,6 @@ static suite_creator_t suites[] =
- 	gcs_memb_suite,
+@@ -39,7 +38,6 @@ static suite_creator_t suites[] =
+ 	gcs_act_cchange_suite,
  	gcs_group_suite,
  	gcs_backend_suite,
 -	gcs_core_suite,
