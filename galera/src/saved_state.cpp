@@ -3,8 +3,8 @@
 //
 
 #include "saved_state.hpp"
-#include "gu_dbug.h"
-#include "uuid.hpp"
+#include <gu_dbug.h>
+#include <gu_uuid.hpp>
 
 #include <fstream>
 
@@ -224,9 +224,9 @@ SavedState::mark_safe()
     {
         gu::Lock lock(mtx_); ++total_locks_;
 
-        if (0 == unsafe_() && (written_uuid_ != uuid_ || seqno_ >= 0))
+        if (0 == unsafe_() && (written_uuid_ != uuid_ || seqno_ >= 0) &&
+            !corrupt_)
         {
-            assert(false == corrupt_);
             /* this will write down proper seqno if set() was called too early
              * (in unsafe state) */
             write_file (uuid_, seqno_, safe_to_bootstrap_);
@@ -237,10 +237,6 @@ SavedState::mark_safe()
 void
 SavedState::mark_corrupt()
 {
-    /* Half LONG_MAX keeps us equally far from overflow and underflow by
-       mark_unsafe()/mark_safe() calls */
-    unsafe_ = (std::numeric_limits<long>::max() >> 1);
-
     gu::Lock lock(mtx_); ++total_locks_;
 
     if (corrupt_) return;
@@ -254,6 +250,21 @@ SavedState::mark_corrupt()
 }
 
 void
+SavedState::mark_uncorrupt(const wsrep_uuid_t& u, wsrep_seqno_t s)
+{
+    gu::Lock lock(mtx_); ++total_locks_;
+
+    if (!corrupt_) return;
+
+    uuid_    = u;
+    seqno_   = s;
+    unsafe_  = 0;
+    corrupt_ = false;
+
+    write_file (u, s, safe_to_bootstrap_);
+}
+
+void
 SavedState::write_file(const wsrep_uuid_t& u, const wsrep_seqno_t s,
                        bool safe_to_bootstrap)
 {
@@ -264,14 +275,13 @@ SavedState::write_file(const wsrep_uuid_t& u, const wsrep_seqno_t s,
         if (s >= 0) { log_debug << "Saving state: " << u << ':' << s; }
 
         char buf[MAX_SIZE];
-        const gu_uuid_t* const uu(reinterpret_cast<const gu_uuid_t*>(&u));
         int state_len = snprintf (buf, MAX_SIZE - 1,
                                   "# GALERA saved state"
                                   "\nversion: " VERSION
                                   "\nuuid:    " GU_UUID_FORMAT
                                   "\nseqno:   %" PRId64
                                   "\nsafe_to_bootstrap: %d\n",
-                                  GU_UUID_ARGS(uu), s, safe_to_bootstrap);
+                                  GU_UUID_ARGS(&u), s, safe_to_bootstrap);
 
         int write_size;
         for (write_size = state_len; write_size < current_len_; ++write_size)

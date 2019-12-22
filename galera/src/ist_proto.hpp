@@ -1,18 +1,22 @@
 //
-// Copyright (C) 2011-2017 Codership Oy <info@codership.com>
+// Copyright (C) 2011-2019 Codership Oy <info@codership.com>
 //
 
 #ifndef GALERA_IST_PROTO_HPP
 #define GALERA_IST_PROTO_HPP
 
+#include "gcs.hpp"
 #include "trx_handle.hpp"
 
 #include "GCache.hpp"
 
+#include "gu_asio.hpp"
 #include "gu_logger.hpp"
 #include "gu_serialize.hpp"
 #include "gu_vector.hpp"
 #include "gu_array.hpp"
+
+#include <string>
 
 //
 // Message class must have non-virtual destructor until
@@ -50,81 +54,102 @@ namespace galera
 {
     namespace ist
     {
+        static int const VER21 = 4;
+        static int const VER40 = 10;
+
         class Message
         {
         public:
             typedef enum
             {
-                T_NONE = 0,
+                T_NONE      = 0,
                 T_HANDSHAKE = 1,
                 T_HANDSHAKE_RESPONSE = 2,
-                T_CTRL = 3,
-                T_TRX = 4
+                T_CTRL      = 3,
+                T_TRX       = 4,
+                T_CCHANGE   = 5,
+                T_SKIP      = 6
             } Type;
 
-            Message(int       version = -1,
+            typedef enum
+            {
+                F_PRELOAD = 0x1
+            } Flag;
+
+            explicit
+            Message(int       version,
                     Type      type    = T_NONE,
                     uint8_t   flags   = 0,
                     int8_t    ctrl    = 0,
-                    uint64_t  len     = 0)
+                    uint32_t  len     = 0,
+                    wsrep_seqno_t seqno = WSREP_SEQNO_UNDEFINED)
                 :
-                version_(version),
+                seqno_  (seqno  ),
+                len_    (len    ),
                 type_   (type   ),
+                version_(version),
                 flags_  (flags  ),
-                ctrl_   (ctrl   ),
-                len_    (len    )
-            { }
+                ctrl_   (ctrl   )
+            {}
+
+            int           version() const { return version_; }
+            Type          type()    const { return type_   ; }
+            uint8_t       flags()   const { return flags_  ; }
+            int8_t        ctrl()    const { return ctrl_   ; }
+            uint32_t      len()     const { return len_    ; }
+            wsrep_seqno_t seqno()   const { return seqno_  ; }
+
+            void set_type_seqno(Type t, wsrep_seqno_t s)
+            {
+                type_ = t; seqno_ = s;
+            }
 
             ~Message() { }
 
-            int      version() const { return version_; }
-            Type     type()    const { return type_   ; }
-            uint8_t  flags()   const { return flags_  ; }
-            int8_t   ctrl()    const { return ctrl_   ; }
-            uint64_t len()     const { return len_    ; }
-
             size_t serial_size() const
             {
-                if (version_ > 3)
+                if (gu_likely(version_ >= VER40))
                 {
                     // header: version 1 byte, type 1 byte, flags 1 byte,
-                    //         ctrl field 1 byte
-                    return 4 + sizeof(len_);
+                    //         ctrl field 1 byte, length 4 bytes, seqno 8 bytes
+                    return 4 + 4 + 8 + sizeof(checksum_t);
                 }
                 else
                 {
-                    return sizeof(*this);
+                    // header: version 1 byte, type 1 byte, flags 1 byte,
+                    //         ctrl field 1 byte, length 8 bytes
+                    return 4 + 8;
                 }
             }
 
             size_t serialize(gu::byte_t* buf, size_t buflen, size_t offset)const
             {
-#ifndef NDEBUG
-                size_t orig_offset(offset);
-#endif // NDEBUG
-                if (version_ > 3)
-                {
-                    offset = gu::serialize1(uint8_t(version_),
-                                            buf, buflen, offset);
-                    offset = gu::serialize1(uint8_t(type_),
-                                            buf, buflen, offset);
-                    offset = gu::serialize1(flags_, buf, buflen, offset);
-                    offset = gu::serialize1(ctrl_,  buf, buflen, offset);
-                    offset = gu::serialize8(len_,   buf, buflen, offset);
-                }
-                else
-                {
-                    if (buflen < offset + sizeof(*this))
-                    {
-                        gu_throw_error(EMSGSIZE) << "buffer too short";
-                    }
+                assert(version_ >= VER21);
 
-                    *reinterpret_cast<Message*>(buf + offset) = *this;
-                    offset += sizeof(*this);
+                size_t const orig_offset(offset);
+
+                offset = gu::serialize1(uint8_t(version_), buf, buflen, offset);
+                offset = gu::serialize1(uint8_t(type_), buf, buflen, offset);
+                offset = gu::serialize1(flags_, buf, buflen, offset);
+                offset = gu::serialize1(ctrl_,  buf, buflen, offset);
+
+                if (gu_likely(version_ >= VER40))
+                {
+                    offset = gu::serialize4(len_,   buf, buflen, offset);
+                    offset = gu::serialize8(seqno_, buf, buflen, offset);
+
+                    *reinterpret_cast<checksum_t*>(buf + offset) =
+                        htog_checksum(buf + orig_offset, offset - orig_offset);
+
+                    offset += sizeof(checksum_t);
+                }
+                else /**/
+                {
+                    uint64_t const tmp(len_);
+                    offset = gu::serialize8(tmp, buf, buflen, offset);
                 }
 
-                assert((version_ > 3 && offset - orig_offset == 12) ||
-                       (offset - orig_offset == sizeof(*this)));
+                assert(offset - orig_offset == serial_size());
 
                 return offset;
             }
@@ -132,65 +157,73 @@ namespace galera
             size_t unserialize(const gu::byte_t* buf, size_t buflen,
                                size_t offset)
             {
-                assert(version_ >= 0);
-#ifndef NDEBUG
+                assert(version_ >= VER21);
+
                 size_t orig_offset(offset);
-#endif // NDEBUG
+
                 uint8_t u8;
-                if (version_ > 3)
+                offset = gu::unserialize1(buf, buflen, offset, u8);
+
+                if (gu_unlikely(u8 != version_)) throw_invalid_version(u8);
+
+                offset = gu::unserialize1(buf, buflen, offset, u8);
+                type_  = static_cast<Message::Type>(u8);
+                offset = gu::unserialize1(buf, buflen, offset, flags_);
+                offset = gu::unserialize1(buf, buflen, offset, ctrl_);
+
+                if (gu_likely(version_ >= VER40))
                 {
-                    offset = gu::unserialize1(buf, buflen, offset, u8);
+                    offset = gu::unserialize4(buf, buflen, offset, len_);
+                    offset = gu::unserialize8(buf, buflen, offset, seqno_);
+
+                    checksum_t const computed(htog_checksum(buf + orig_offset,
+                                                            offset-orig_offset));
+                    const checksum_t* expected
+                        (reinterpret_cast<const checksum_t*>(buf + offset));
+
+                    if (gu_unlikely(computed != *expected))
+                        throw_corrupted_header();
+
+                    offset += sizeof(checksum_t);
                 }
                 else
                 {
-                    u8 = *reinterpret_cast<const int*>(buf + offset);
+                    uint64_t tmp;
+                    offset = gu::unserialize8(buf, buflen, offset, tmp);
+                    assert(tmp < std::numeric_limits<uint32_t>::max());
+                    len_ = tmp;
                 }
 
-                if (u8 != version_)
-                {
-                    gu_throw_error(EPROTO) << "invalid protocol version "
-                                           << int(u8)
-                                           << ", expected " << version_;
-                }
-
-                if (u8 > 3)
-                {
-                    version_ = u8;
-                    offset = gu::unserialize1(buf, buflen, offset, u8);
-                    type_  = static_cast<Message::Type>(u8);
-                    offset = gu::unserialize1(buf, buflen, offset, flags_);
-                    offset = gu::unserialize1(buf, buflen, offset, ctrl_);
-                    offset = gu::unserialize8(buf, buflen, offset, len_);
-                }
-                else
-                {
-                    if (buflen < offset + sizeof(*this))
-                    {
-                        gu_throw_error(EMSGSIZE)
-                            <<" buffer too short for version " << version_
-                            << ": " << buflen << " " << offset << " "
-                            << sizeof(*this);
-                    }
-
-                    *this = *reinterpret_cast<const Message*>(buf + offset);
-                    offset += sizeof(*this);
-                }
-
-                assert((version_ > 3 && offset - orig_offset == 12) ||
-                       (offset - orig_offset == sizeof(*this)));
+                assert(offset - orig_offset == serial_size());
 
                 return offset;
             }
 
         private:
 
-            int      version_; // unfortunately for compatibility with older
-                               // versions we must leave it as int (4 bytes)
+            wsrep_seqno_t seqno_;
+            uint32_t len_;
             Type     type_;
+            uint8_t  version_;
             uint8_t  flags_;
             int8_t   ctrl_;
-            uint64_t len_;
+
+            typedef uint64_t checksum_t;
+
+            // returns endian-adjusted checksum of buf
+            static checksum_t
+            htog_checksum(const void* const buf, size_t const size)
+            {
+                return
+                    gu::htog<checksum_t>(gu::FastHash::digest<checksum_t>(buf,
+                                                                          size));
+            }
+
+            void throw_invalid_version(uint8_t v);
+            void throw_corrupted_header();
         };
+
+        std::ostream& operator<< (std::ostream& os, const Message& m);
 
         class Handshake : public Message
         {
@@ -225,12 +258,16 @@ namespace galera
             { }
         };
 
-        class Trx : public Message
+        class Ordered : public Message
         {
         public:
-            Trx(int version = -1, uint64_t len = 0)
+            Ordered(int      version,
+                    Type     type,
+                    uint8_t  flags,
+                    uint32_t len,
+                    wsrep_seqno_t const seqno)
                 :
-                Message(version, Message::T_TRX, 0, 0, len)
+                Message(version, type, flags, 0, len, seqno)
             { }
         };
 
@@ -239,9 +276,10 @@ namespace galera
         {
         public:
 
-            Proto(TrxHandle::SlavePool& sp, int version, bool keep_keys)
+            Proto(gcache::GCache&       gc,
+                  int version, bool keep_keys)
                 :
-                trx_pool_ (sp),
+                gcache_   (gc),
                 raw_sent_ (0),
                 real_sent_(0),
                 version_  (version),
@@ -415,32 +453,44 @@ namespace galera
 
 
             template <class ST>
-            void send_trx(ST&                           socket,
-                          const gcache::GCache::Buffer& buffer)
-            {
-                const bool rolled_back(buffer.seqno_d() == -1);
 
-                galera::WriteSetIn ws;
+            void send_ordered(ST&                           socket,
+                              const gcache::GCache::Buffer& buffer,
+                              bool const                    preload_flag)
+            {
+                Message::Type type(ordered_type(buffer));
+
                 gu::array<asio::const_buffer, 3>::type cbs;
+
                 size_t      payload_size; /* size of the 2nd cbs buffer */
                 size_t      sent;
 
-                if (gu_unlikely(rolled_back))
+                // for proto ver < VER40 compatibility
+                int64_t seqno_d(WSREP_SEQNO_UNDEFINED);
+
+                if (gu_likely(Message::T_SKIP != type))
                 {
-                    payload_size = 0;
-                }
-                else
-                {
-                    if (keep_keys_ || version_ < WS_NG_VERSION)
+                    assert(Message::T_TRX == type || version_ >= VER40);
+
+                    galera::WriteSetIn ws;
+                    gu::Buf tmp = { buffer.ptr(), buffer.size() };
+
+                    if (keep_keys_ || Message::T_CCHANGE == type)
                     {
                         payload_size = buffer.size();
                         const void* const ptr(buffer.ptr());
                         cbs[1] = asio::const_buffer(ptr, payload_size);
                         cbs[2] = asio::const_buffer(ptr, 0);
+
+                        if (gu_likely(Message::T_TRX == type)) // compatibility
+                        {
+                            ws.read_header (tmp);
+                            seqno_d = buffer.seqno_g() - ws.pa_range();
+                            assert(buffer.seqno_g() == ws.seqno());
+                        }
                     }
                     else
                     {
-                        gu::Buf tmp = { buffer.ptr(), buffer.size() };
                         ws.read_buf (tmp, 0);
 
                         WriteSetIn::GatherVector out;
@@ -448,23 +498,44 @@ namespace galera
                         assert (2 == out->size());
                         cbs[1] = asio::const_buffer(out[0].ptr, out[0].size);
                         cbs[2] = asio::const_buffer(out[1].ptr, out[1].size);
+
+                        seqno_d = buffer.seqno_g() - ws.pa_range();
+
+                        assert(buffer.seqno_g() == ws.seqno());
                     }
                 }
+                else
+                {
+                    assert(Message::T_SKIP == type);
+                    payload_size = 0;
+                    seqno_d = WSREP_SEQNO_UNDEFINED;
 
-                size_t const trx_meta_size(
-                    8 /* serial_size(buffer.seqno_g()) */ +
-                    8 /* serial_size(buffer.seqno_d()) */
-                    );
+                    /* in proto ver < VER40 everything is T_TRX */
+                    if (gu_unlikely(version_ < VER40)) type = Message::T_TRX;
+                }
 
-                Trx trx_msg(version_, trx_meta_size + payload_size);
+                /* in version >= 3 metadata is included in Msg header, leaving
+                 * it here for backward compatibility */
+                size_t const trx_meta_size(version_ >= VER40 ? 0 :
+                                           (8 /* seqno_g */ + 8 /* seqno_d */));
 
-                gu::Buffer buf(trx_msg.serial_size() + trx_meta_size);
-                size_t  offset(trx_msg.serialize(&buf[0], buf.size(), 0));
+                uint8_t const msg_flags((version_ >= VER40 && preload_flag) ?
+                                        Message::F_PRELOAD : 0);
 
-                offset = gu::serialize8(buffer.seqno_g(),
-                                        &buf[0], buf.size(), offset);
-                offset = gu::serialize8(buffer.seqno_d(),
-                                        &buf[0], buf.size(), offset);
+                Ordered to_msg(version_, type, msg_flags,
+                               trx_meta_size + payload_size, buffer.seqno_g());
+
+                gu::Buffer buf(to_msg.serial_size() + trx_meta_size);
+                size_t  offset(to_msg.serialize(&buf[0], buf.size(), 0));
+
+                if (gu_unlikely(version_ < VER40))
+                {
+                    offset = gu::serialize8(buffer.seqno_g(),
+                                            &buf[0], buf.size(), offset);
+                    offset = gu::serialize8(seqno_d,
+                                            &buf[0], buf.size(), offset);
+                }
+
                 cbs[0] = asio::const_buffer(&buf[0], buf.size());
 
                 if (gu_likely(payload_size))
@@ -479,11 +550,33 @@ namespace galera
                 log_debug << "sent " << sent << " bytes";
             }
 
+            template <class ST>
+            void skip_bytes(ST& socket, size_t bytes)
+            {
+                gu::Buffer buf(4092);
+                while (bytes > 0)
+                {
+                    bytes -= asio::read(
+                        socket,
+                        asio::buffer(&buf[0], std::min(buf.size(), bytes)));
+                }
+                assert(bytes == 0);
+            }
+
 
             template <class ST>
-            galera::TrxHandle*
-            recv_trx(ST& socket)
+            void
+            recv_ordered(ST& socket,
+                         std::pair<gcs_action, bool>& ret)
             {
+                gcs_action& act(ret.first);
+
+                act.seqno_g = 0;               // EOF
+                // act.seqno_l has no significance
+                act.buf     = NULL;            // skip
+                act.size    = 0;               // skip
+                act.type    = GCS_ACT_UNKNOWN; // EOF
+
                 Message    msg(version_);
                 gu::Buffer buf(msg.serial_size());
                 size_t n(asio::read(socket, asio::buffer(&buf[0], buf.size())));
@@ -501,77 +594,143 @@ namespace galera
                 switch (msg.type())
                 {
                 case Message::T_TRX:
+                case Message::T_CCHANGE:
+                case Message::T_SKIP:
                 {
-                    // TODO: ideally we want to make seqno_g and cert verdict
-                    // be a part of msg object above, so that we can skip this
-                    // read. The overhead is tiny given that vast majority of
-                    // messages will be trx writesets.
-                    wsrep_seqno_t seqno_g, seqno_d;
+                    size_t  offset(0);
+                    int64_t seqno_g(msg.seqno());  // compatibility with 3.x
 
-                    buf.resize(sizeof(seqno_g) + sizeof(seqno_d));
-
-                    n = asio::read(socket, asio::buffer(&buf[0], buf.size()));
-                    if (n != buf.size())
+                    if (gu_unlikely(version_ < VER40)) //compatibility with 3.x
                     {
-                        gu_throw_error(EPROTO) << "error reading trx meta data";
-                    }
+                        assert(msg.type() == Message::T_TRX);
 
-                    size_t offset(gu::unserialize8(&buf[0], buf.size(), 0,
-                                                   seqno_g));
-                    offset = gu::unserialize8(&buf[0], buf.size(), offset,
-                                              seqno_d);
+                        int64_t seqno_d;
 
-                    galera::TrxHandle* trx(galera::TrxHandle::New(trx_pool_));
+                        buf.resize(sizeof(seqno_g) + sizeof(seqno_d));
 
-                    if (seqno_d == WSREP_SEQNO_UNDEFINED)
-                    {
-                        if (offset != msg.len())
+                        n = asio::read(socket, asio::buffer(&buf[0],buf.size()));
+                        if (n != buf.size())
                         {
+                            assert(0);
+                            gu_throw_error(EPROTO)
+                                << "error reading trx meta data";
+                        }
+
+                        offset = gu::unserialize8(&buf[0],buf.size(),0,seqno_g);
+                        if (gu_unlikely(seqno_g <= 0))
+                        {
+                            assert(0);
+                            gu_throw_error(EINVAL)
+                                << "non-positive sequence number " << seqno_g;
+                        }
+
+                        offset = gu::unserialize8(&buf[0], buf.size(), offset,
+                                                  seqno_d);
+                        if (gu_unlikely(seqno_d == WSREP_SEQNO_UNDEFINED &&
+                                        offset != msg.len()))
+                        {
+                            assert(0);
                             gu_throw_error(EINVAL)
                                 << "message size " << msg.len()
-                                << " does not match expected size " << offset;
+                                << " does not match expected size "<< offset;
                         }
+
+                        Message::Type const type
+                            (seqno_d >= 0 ? Message::T_TRX : Message::T_SKIP);
+
+                        msg.set_type_seqno(type, seqno_g);
                     }
-                    else
+                    else  // end compatibility with 3.x
                     {
-                        MappedBuffer& wbuf(trx->write_set_collection());
-                        size_t const wsize(msg.len() - offset);
-                        wbuf.resize(wsize);
+                        assert(seqno_g > 0);
+                    }
 
-                        n = asio::read(socket,
-                                       asio::buffer(&wbuf[0], wbuf.size()));
+                    assert(msg.seqno() > 0);
 
-                        if (gu_unlikely(n != wbuf.size()))
+                    /* Backward compatibility code above could change msg type.
+                     * but it should not change below. Saving const for later
+                     * assert(). */
+                    Message::Type const msg_type(msg.type());
+                    gcs_act_type  const gcs_type
+                        (msg_type == Message::T_CCHANGE ?
+                         GCS_ACT_CCHANGE : GCS_ACT_WRITESET);
+
+                    const void* wbuf;
+                    ssize_t     wsize;
+                    bool        already_cached(false);
+
+                    // Check if cert index preload trx is already in gcache.
+                    if ((msg.flags() & Message::F_PRELOAD))
+                    {
+                        ret.second = true;
+
+                        try
                         {
-                            gu_throw_error(EPROTO)
-                                << "error reading write set data";
+                            wbuf = gcache_.seqno_get_ptr(seqno_g, wsize);
+
+                            skip_bytes(socket, msg.len() - offset);
+
+                            already_cached = true;
+                        }
+                        catch (gu::NotFound& nf)
+                        {
+                            // not found from gcache, continue as normal
+                        }
+                    }
+
+                    if (!already_cached)
+                    {
+                        if (gu_likely(msg_type != Message::T_SKIP))
+                        {
+                            wsize = msg.len() - offset;
+
+                            void*   const ptr(gcache_.malloc(wsize));
+                            ssize_t const r
+                                (asio::read(socket, asio::buffer(ptr, wsize)));
+
+                            if (gu_unlikely(r != wsize))
+                            {
+                                gu_throw_error(EPROTO)
+                                    << "error reading write set data";
+                            }
+
+                            wbuf = ptr;
+                        }
+                        else
+                        {
+                            wsize = GU_WORDSIZE/8; // bits to bytes
+                            wbuf  = gcache_.malloc(wsize);
                         }
 
-                        trx->unserialize(&wbuf[0], wbuf.size(), 0);
+                        gcache_.seqno_assign(wbuf, msg.seqno(), gcs_type,
+                                             msg_type == Message::T_SKIP);
                     }
 
-                    if (seqno_d == WSREP_SEQNO_UNDEFINED ||
-                        trx->version() < 3)
-                    {
-                        trx->set_received(0, -1, seqno_g);
-                        trx->set_depends_seqno(seqno_d);
-                    }
-                    else
-                    {
-                        trx->set_received_from_ws();
-                        assert(trx->global_seqno() == seqno_g);
-                        assert(trx->depends_seqno() >= seqno_d);
-                    }
-                    trx->mark_certified();
+                    assert(msg.type() == msg_type);
 
-                    log_debug << "received trx body: " << *trx;
-                    return trx;
+                    switch(msg_type)
+                    {
+                    case Message::T_TRX:
+                    case Message::T_CCHANGE:
+                        act.buf  = wbuf;           // not skip
+                        act.size = wsize;
+                        // fall through
+                    case Message::T_SKIP:
+                        act.seqno_g = msg.seqno(); // not EOF
+                        act.type    = gcs_type;
+                        break;
+                    default:
+                        gu_throw_error(EPROTO) << "Unrecognized message type"
+                                               << msg_type;
+                    }
+
+                    return;
                 }
                 case Message::T_CTRL:
                     switch (msg.ctrl())
                     {
                     case Ctrl::C_EOF:
-                        return 0;
+                        return;
                     default:
                         if (msg.ctrl() >= 0)
                         {
@@ -589,17 +748,44 @@ namespace galera
                 }
 
                 gu_throw_fatal; throw;
-                return 0; // keep compiler happy
             }
 
         private:
 
-            TrxHandle::SlavePool& trx_pool_;
+            gcache::GCache& gcache_;
 
             uint64_t raw_sent_;
             uint64_t real_sent_;
             int      version_;
             bool     keep_keys_;
+
+            Message::Type ordered_type(const gcache::GCache::Buffer& buf)
+            {
+                assert(buf.type() == GCS_ACT_WRITESET ||
+                       buf.type() == GCS_ACT_CCHANGE);
+
+                if (gu_likely(!buf.skip()))
+                {
+                    switch (buf.type())
+                    {
+                    case GCS_ACT_WRITESET:
+                        return Message::T_TRX;
+                    case GCS_ACT_CCHANGE:
+                        return (version_ >= VER40 ?
+                                Message::T_CCHANGE : Message::T_SKIP);
+                    default:
+                        log_error << "Unsupported message type from cache: "
+                                  << buf.type()
+                                  << ". Skipping seqno " << buf.seqno_g();
+                        assert(0);
+                        return  Message::T_SKIP;
+                    }
+                }
+                else
+                {
+                    return Message::T_SKIP;
+                }
+            }
         };
     }
 }

@@ -13,6 +13,7 @@
 #include <gu_types.hpp>
 #include <gu_lock.hpp> // for gu::Mutex and gu::Cond
 #include <gu_config.hpp>
+#include <gu_gtid.hpp>
 
 #include <string>
 #include <iostream>
@@ -26,6 +27,8 @@ namespace gcache
     class GCache
     {
     public:
+
+        static const std::string& PARAMS_DIR;
 
         static void register_params(gu::Config& cfg)
         {
@@ -58,14 +61,22 @@ namespace gcache
          * Reinitialize seqno sequence (after SST or such)
          * Clears seqno->ptr map // and sets seqno_min to seqno.
          */
-        void  seqno_reset (const gu::UUID& gid, seqno_t seqno);
+        void seqno_reset (const gu::GTID& gtid);
 
         /*!
          * Assign sequence number to buffer pointed to by ptr
          */
-        void  seqno_assign (const void* ptr,
-                            int64_t     seqno_g,
-                            int64_t     seqno_d);
+        void seqno_assign (const void* ptr,
+                           int64_t     seqno_g,
+                           uint8_t     type,
+                           bool        skip);
+
+        /*!
+         * Mark buffer to be skipped
+         */
+        void seqno_skip (const void* ptr,
+                         int64_t     seqno_g,
+                         uint8_t     type);
 
         /*!
          * Release (free) buffers up to seqno
@@ -90,42 +101,44 @@ namespace gcache
          */
         void  seqno_lock (int64_t const seqno_g);
 
-        /*!          DEPRECATED
+        /*!
          * Get pointer to buffer identified by seqno.
-         * Moves lock to the given seqno.
+         * Moves lock to the given seqno and clears released flag if any.
+         * The buffer will need to be "freed" again.
          * @throws NotFound
          */
-        const void* seqno_get_ptr (int64_t  seqno_g,
-                                   int64_t& seqno_d,
-                                   ssize_t& size);
+        const void* seqno_get_ptr (int64_t seqno_g, ssize_t& size);
 
         class Buffer
         {
         public:
 
-            Buffer() : seqno_g_(), seqno_d_(), ptr_(), size_() { }
+            Buffer() : seqno_g_(), ptr_(), size_(), skip_(), type_() { }
 
             Buffer (const Buffer& other)
                 :
                 seqno_g_(other.seqno_g_),
-                seqno_d_(other.seqno_d_),
                 ptr_    (other.ptr_),
-                size_   (other.size_)
+                size_   (other.size_),
+                skip_   (other.skip_),
+                type_   (other.type_)
             { }
 
             Buffer& operator= (const Buffer& other)
             {
                 seqno_g_ = other.seqno_g_;
-                seqno_d_ = other.seqno_d_;
                 ptr_     = other.ptr_;
                 size_    = other.size_;
+                skip_    = other.skip_;
+                type_    = other.type_;
                 return *this;
             }
 
             int64_t           seqno_g() const { return seqno_g_; }
-            int64_t           seqno_d() const { return seqno_d_; }
             const gu::byte_t* ptr()     const { return ptr_;     }
             ssize_type        size()    const { return size_;    }
+            bool              skip()    const { return skip_;    }
+            uint8_t           type()    const { return type_;    }
 
         protected:
 
@@ -134,18 +147,19 @@ namespace gcache
                 ptr_ = reinterpret_cast<const gu::byte_t*>(p);
             }
 
-            void set_other (int64_t g, int64_t d, ssize_type s)
+            void set_other (int64_t g, ssize_type s, bool skp, uint8_t t)
             {
                 assert(s > 0);
-                seqno_g_ = g; seqno_d_ = d; size_ = s;
+                seqno_g_ = g; size_ = s; skip_ = skp, type_ = t;
             }
 
         private:
 
             int64_t           seqno_g_;
-            int64_t           seqno_d_;
             const gu::byte_t* ptr_;
-            ssize_type        size_; /* same type as passed to malloc() */
+            ssize_type        size_;
+            bool              skip_;
+            uint8_t           type_;
 
             friend class GCache;
         };

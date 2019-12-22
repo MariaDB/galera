@@ -35,15 +35,17 @@ namespace gcache
 
         void* malloc  (size_type size);
 
+        void* realloc (void* ptr, size_type size);
+
         void  free    (BufferHeader* bh) { assert(0); }
 
-        void* realloc (void* ptr, size_type size);
+        void  repossess(BufferHeader* bh) { assert(0); }
 
         void  discard (BufferHeader* bh)
         {
             assert(BH_is_released(bh));
             assert(SEQNO_ILL == bh->seqno_g);
-            free_page_ptr(static_cast<Page*>(bh->ctx), bh);
+            free_page_ptr(static_cast<Page*>(BH_ctx(bh)), bh);
         }
 
         void  reset();

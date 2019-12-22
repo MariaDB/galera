@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2018 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2019 Codership Oy <info@codership.com>
  */
 
 #include "GCache.hpp"
@@ -26,6 +26,8 @@ namespace gcache
     bool
     GCache::discard_seqno (int64_t seqno)
     {
+        assert(mtx.locked() && mtx.owned());
+
 #ifndef NDEBUG
         seqno_t begin(0);
         if (params.debug())
@@ -132,9 +134,8 @@ namespace gcache
             {
                 log_fatal << "OOO release: seqno_released " << seqno_released
                           << ", releasing " << bh->seqno_g;
+                assert(0);
             }
-            assert(seqno_released + 1 == bh->seqno_g ||
-                   SEQNO_NONE == seqno_released);
 #endif
             new_released = bh->seqno_g;
         }

@@ -13,6 +13,7 @@
 #include <string.h>
 #include <galerautils.h>
 #include <gu_serialize.hpp>
+#include <gu_hexdump.h>
 
 #define GCS_STATE_MSG_VER 6
 #define GCS_STATE_MSG_NO_PROTO_DOWNGRADE_VER 6
@@ -21,6 +22,8 @@
 #include "gcs_state_msg.hpp"
 #include "gcs_node.hpp"
 
+#include "gu_logger.hpp"
+
 gcs_state_msg_t*
 gcs_state_msg_create (const gu_uuid_t* state_uuid,
                       const gu_uuid_t* group_uuid,
@@ -28,6 +31,10 @@ gcs_state_msg_create (const gu_uuid_t* state_uuid,
                       gcs_seqno_t      prim_seqno,
                       gcs_seqno_t      received,
                       gcs_seqno_t      cached,
+                      gcs_seqno_t      last_applied,
+                      gcs_seqno_t      vote_seqno,
+                      int64_t          vote_res,
+                      uint8_t          vote_policy,
                       int              prim_joined,
                       gcs_node_state_t prim_state,
                       gcs_node_state_t current_state,
@@ -69,6 +76,10 @@ gcs_state_msg_create (const gu_uuid_t* state_uuid,
         ret->prim_seqno    = prim_seqno;
         ret->received      = received;
         ret->cached        = cached;
+        ret->last_applied  = last_applied;
+        ret->vote_seqno    = vote_seqno;
+        ret->vote_res      = vote_res;
+        ret->vote_policy   = vote_policy;
         ret->prim_state    = prim_state;
         ret->current_state = current_state;
         ret->version       = GCS_STATE_MSG_VER;
@@ -100,13 +111,6 @@ gcs_state_msg_destroy (gcs_state_msg_t* state)
     gu_free (state);
 }
 
-static size_t const sizeof_v5_stuff(
-        sizeof (int64_t)     +   // last_applied
-        sizeof (int64_t)     +   // vote_seqno
-        sizeof (int64_t)     +   // vote_res
-        sizeof (uint8_t)         // vote_policy
-    );
-
 /* Returns length needed to serialize gcs_state_msg_t for sending */
 size_t
 gcs_state_msg_len (gcs_state_msg_t* state)
@@ -133,7 +137,10 @@ gcs_state_msg_len (gcs_state_msg_t* state)
 // V4 stuff
         sizeof (int32_t)     +   // desync count
 // V5 stuff
-        sizeof_v5_stuff      +
+        sizeof (int64_t)     +   // last_applied
+        sizeof (int64_t)     +   // vote_seqno
+        sizeof (int64_t)     +   // vote_res
+        sizeof (uint8_t)     +   // vote_policy
 // V6 stuff
         sizeof (int8_t)      +   // prim_gcs_ver
         sizeof (int8_t)      +   // prim_repl_ver
@@ -185,9 +192,12 @@ gcs_state_msg_write (void* buf, const gcs_state_msg_t* state)
 // V4 stuff
     int32_t*  desync_count   = (int32_t*)(cached + 1);
 // V5 stuff
-    uint8_t*  v5_stuff       = (uint8_t*)(desync_count + 1);
+    int64_t* last_applied   = (int64_t*)(desync_count + 1);
+    int64_t* vote_seqno     = last_applied + 1;
+    int64_t* vote_res       = vote_seqno   + 1;
+    uint8_t* vote_policy    = (uint8_t*)(vote_res + 1);
 // V6 stuff
-    uint8_t*  prim_gcs_ver   = (uint8_t*)(v5_stuff + sizeof_v5_stuff);
+    uint8_t*  prim_gcs_ver   = (uint8_t*)(vote_policy + 1);
     uint8_t*  prim_repl_ver  = (uint8_t*)(prim_gcs_ver + 1);
     uint8_t*  prim_appl_ver  = (uint8_t*)(prim_repl_ver + 1);
 
@@ -211,12 +221,23 @@ gcs_state_msg_write (void* buf, const gcs_state_msg_t* state)
 
     gu::serialize8(state->cached, cached, 0);
     gu::serialize4(state->desync_count, desync_count, 0);
+    gu::serialize8(state->last_applied, last_applied, 0);
+
+    gu::serialize8(state->vote_seqno, vote_seqno, 0); // 4.ee
+    gu::serialize8(state->vote_res, vote_res, 0);
+    gu::serialize1(state->vote_policy, vote_policy, 0);
 
     *prim_gcs_ver    = state->prim_gcs_ver;
     *prim_repl_ver   = state->prim_repl_ver;
     *prim_appl_ver   = state->prim_appl_ver;
 
-    return ((uint8_t*)(prim_appl_ver + 1) - (uint8_t*)buf);
+    size_t const msg_len((uint8_t*)(prim_appl_ver + 1) - (uint8_t*)buf);
+#ifndef NDEBUG
+    char str[1024];
+    gu_hexdump(buf, msg_len, str, sizeof(str), true);
+    gu_debug("Serialized state message of size %zd\n%s", msg_len, str);
+#endif /* NDEBUG */
+    return msg_len;
 }
 
 /* De-serialize gcs_state_msg_t from buf */
@@ -224,6 +245,12 @@ gcs_state_msg_t*
 gcs_state_msg_read (const void* const buf, ssize_t const buf_len)
 {
     assert (buf_len > 0);
+
+#ifndef NDEBUG
+    char str[1024];
+    gu_hexdump(buf, buf_len, str, sizeof(str), true);
+    gu_debug("Received state message of size %zd\n%s", buf_len, str);
+#endif /* NDEBUG*/
 
     /* beginning of the message is always version 0 */
     CONST_STATE_MSG_FIELDS_V0(buf);
@@ -242,18 +269,30 @@ gcs_state_msg_read (const void* const buf, ssize_t const buf_len)
         assert(buf_len >= (uint8_t*)(cached_ptr + 1) - (uint8_t*)buf);
         gu::unserialize8(cached_ptr, 0, cached);
     }
-
+// v4 stuff
     int32_t  desync_count = 0;
     int32_t* desync_count_ptr = (int32_t*)(cached_ptr + 1);
     if (*version >= 4) {
         assert(buf_len >= (uint8_t*)(desync_count_ptr + 1) - (uint8_t*)buf);
         gu::unserialize4(desync_count_ptr, 0, desync_count);
     }
+// v5 stuff
+    int64_t last_applied = 0;
+    int64_t vote_seqno   = 0;
+    int64_t vote_res     = 0;
+    uint8_t vote_policy  = GCS_VOTE_ZERO_WINS; // backward compatibility
+    int64_t* last_applied_ptr = (int64_t*)(desync_count_ptr + 1);
+    if (*version >= 5 && *gcs_proto_ver >= 2) {
+        assert(buf_len > (uint8_t*)(last_applied_ptr + 3) - (uint8_t*)buf);
+        gu::unserialize8(last_applied_ptr, 0, last_applied);
 
-    uint8_t* v5_stuff = (uint8_t*)(desync_count_ptr + 1);
-
+        gu::unserialize8(last_applied_ptr + 1, 0, vote_seqno);
+        gu::unserialize8(last_applied_ptr + 2, 0, vote_res);
+        gu::unserialize1(last_applied_ptr + 3, 0, vote_policy);
+    }
+// v6 stuff
     uint8_t prim_gcs_ver   = 0;
-    uint8_t* prim_gcs_ptr  = (uint8_t*)(v5_stuff + sizeof_v5_stuff);
+    uint8_t* prim_gcs_ptr  = (uint8_t*)(last_applied_ptr + 3) + 1;
     uint8_t prim_repl_ver  = 0;
     uint8_t* prim_repl_ptr = (uint8_t*)(prim_gcs_ptr + 1);
     uint8_t prim_appl_ver  = 0;
@@ -272,6 +311,10 @@ gcs_state_msg_read (const void* const buf, ssize_t const buf_len)
         gtoh64(*prim_seqno),
         gtoh64(*received),
         cached,
+        last_applied,
+        vote_seqno,
+        vote_res,
+        vote_policy,
         gtoh16(*prim_joined),
         (gcs_node_state_t)*prim_state,
         (gcs_node_state_t)*curr_state,
@@ -308,6 +351,9 @@ gcs_state_msg_snprintf (char* str, size_t size, const gcs_state_msg_t* state)
                      "\n\tPrim  seqno  : %lld"
                      "\n\tFirst seqno  : %lld"
                      "\n\tLast  seqno  : %lld"
+                     "\n\tCommit cut   : %lld"
+                     "\n\tLast vote    : %lld.%0llx"
+                     "\n\tVote policy  : %d"
                      "\n\tPrim JOINED  : %d"
                      "\n\tState UUID   : " GU_UUID_FORMAT
                      "\n\tGroup UUID   : " GU_UUID_FORMAT
@@ -324,6 +370,9 @@ gcs_state_msg_snprintf (char* str, size_t size, const gcs_state_msg_t* state)
                      (long long)state->prim_seqno,
                      (long long)state->cached,
                      (long long)state->received,
+                     (long long)state->last_applied,
+                     (long long)state->vote_seqno,(long long)state->vote_res,
+                     state->vote_policy,
                      state->prim_joined,
                      GU_UUID_ARGS(&state->state_uuid),
                      GU_UUID_ARGS(&state->group_uuid),
@@ -358,6 +407,28 @@ gcs_seqno_t
 gcs_state_msg_cached (const gcs_state_msg_t* state)
 {
     return state->cached;
+}
+
+/* Get last applied action seqno */
+gcs_seqno_t
+gcs_state_msg_last_applied (const gcs_state_msg_t* state)
+{
+    return state->last_applied;
+}
+
+/* Get last applied action vote */
+void
+gcs_state_msg_last_vote (const gcs_state_msg_t* state,
+                         gcs_seqno_t& seqno, int64_t& res)
+{
+    seqno = state->vote_seqno;
+    res   = state->vote_res;
+}
+
+uint8_t
+gcs_state_msg_vote_policy (const gcs_state_msg_t* state)
+{
+    return state->vote_policy;
 }
 
 /* Get current node state */
@@ -536,6 +607,7 @@ state_quorum_inherit (const gcs_state_msg_t* states[],
 
     quorum->act_id     = rep->received;
     quorum->conf_id    = rep->prim_seqno;
+    quorum->last_applied = rep->last_applied;
     quorum->group_uuid = rep->group_uuid;
     quorum->primary    = true;
 
@@ -731,6 +803,7 @@ state_quorum_remerge (const gcs_state_msg_t* const states[],
 
             quorum->act_id     = rep->received;
             quorum->conf_id    = rep->prim_seqno;
+            quorum->last_applied = rep->last_applied;
             quorum->group_uuid = rep->group_uuid;
             quorum->primary    = true;
         }
@@ -821,6 +894,7 @@ state_quorum_bootstrap (const gcs_state_msg_t* const states[],
 
             quorum->act_id     = rep->received;
             quorum->conf_id    = rep->prim_seqno;
+            quorum->last_applied = rep->last_applied;
             quorum->group_uuid = rep->group_uuid;
             quorum->primary    = true;
         }
@@ -883,8 +957,8 @@ gcs_state_msg_get_quorum (const gcs_state_msg_t* states[],
     INIT_PROTO_VER(appl_proto_ver);
 #undef INIT_PROTO_VER
 
-    for (i = 0; i < states_num; i++) {
-
+    for (i = 0; i < states_num; i++)
+    {
 #define CHECK_MIN_PROTO_VER(LEVEL)                              \
         if (states[i]->LEVEL <  quorum->LEVEL) {                \
             quorum->LEVEL = states[i]->LEVEL;                   \
@@ -909,6 +983,15 @@ gcs_state_msg_get_quorum (const gcs_state_msg_t* states[],
         CHECK_MIN_PROTO_VER(repl);
         CHECK_MIN_PROTO_VER(appl);
 #undef CHECK_MIN_PROTO_VER
+    }
+
+    if (quorum->gcs_proto_ver < 1)
+    {
+        quorum->vote_policy = GCS_VOTE_ZERO_WINS;
+    }
+    else
+    {
+        quorum->vote_policy = rep->vote_policy;
     }
 
     if (quorum->version < 2) {;} // for future generations

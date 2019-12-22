@@ -28,36 +28,26 @@ namespace gu
 
         Lock (const Mutex& mtx) : mtx_(mtx)
         {
-
-            int const err(mtx_.lock());
-            if (gu_unlikely(err))
-            {
-                std::string msg = "Mutex lock failed: ";
-                msg = msg + strerror(err);
-                throw Exception(msg.c_str(), err);
-            }
+            mtx_.lock();
         }
 
         virtual ~Lock ()
         {
-#ifdef GU_DEBUG_MUTEX
-            assert(mtx_.owned());
-#endif
-            int const err(mtx_.unlock());
-            if (gu_unlikely(err))
-            {
-                log_fatal << "Mutex unlock failed: " << err << " ("
-                          << strerror(err) << "), Aborting.";
-                ::abort();
-            }
-            // log_debug << "Unlocked mutex " << value;
+            mtx_.unlock();
         }
 
         inline void wait (const Cond& cond)
         {
+#ifdef GU_MUTEX_DEBUG
+            mtx_.locked_ = false;
+#endif /* GU_MUTEX_DEBUG */
             cond.ref_count++;
-            gu_cond_wait (&(cond.cond), &mtx_.impl());
+            gu_cond_wait (&(cond.cond), &mtx_.impl()); // never returns error
             cond.ref_count--;
+#ifdef GU_MUTEX_DEBUG
+            mtx_.locked_ = true;
+            mtx_.owned_  = gu_thread_self();
+#endif /* GU_MUTEX_DEBUG */
         }
 
         inline void wait (const Cond& cond, const datetime::Date& date)
@@ -65,9 +55,16 @@ namespace gu
             timespec ts;
 
             date._timespec(ts);
+#ifdef GU_MUTEX_DEBUG
+            mtx_.locked_ = false;
+#endif /* GU_MUTEX_DEBUG */
             cond.ref_count++;
-            int ret = gu_cond_timedwait (&(cond.cond), &mtx_.impl(), &ts);
+            int const ret(gu_cond_timedwait (&(cond.cond), &mtx_.impl(), &ts));
             cond.ref_count--;
+#ifdef GU_MUTEX_DEBUG
+            mtx_.locked_ = true;
+            mtx_.owned_  = gu_thread_self();
+#endif /* GU_MUTEX_DEBUG */
 
             if (gu_unlikely(ret)) gu_throw_error(ret);
         }

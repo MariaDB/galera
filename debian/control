@@ -1,4 +1,4 @@
-Source: galera-3
+Source: galera-4
 Maintainer: Codership Oy <info@codership.com>
 Uploaders: Otto Kekäläinen <otto@seravo.fi>
 Section: database
@@ -15,21 +15,30 @@ Homepage: http://www.galeracluster.com/
 Vcs-Git: git://github.com/codership/galera.git
 Vcs-Browser: http://github.com/codership/galera.git
 
-Package: galera-3
+Package: galera-4
 Architecture: any
 Section: libs
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Conflicts: garbd-2,
            garbd2,
+           garbd-3,
+           garbd3,
            percona-galera-3,
            percona-xtradb-cluster-galera,
            percona-xtradb-cluster-galera-2.x,
            percona-xtradb-cluster-galera-3.x,
+           percona-xtradb-cluster-galera-4.x,
            percona-xtradb-cluster-garbd-2.x,
-           percona-xtradb-cluster-garbd-3.x
-Provides: galera, galera3, percona-xtradb-cluster-galera-25, wsrep
+           percona-xtradb-cluster-garbd-3.x,
+           percona-xtradb-cluster-garbd-4.x,
+           galera-3
 Breaks: galera
 Replaces: galera
+Provides: galera-4,
+          wsrep,
+          galera,
+          galera4,
+          percona-xtradb-cluster-galera-26
 Description: Replication framework for transactional applications
  Galera is a fast synchronous multimaster wsrep provider (replication engine)
  for transactional databases and similar applications. For more information
@@ -38,17 +47,20 @@ Description: Replication framework for transactional applications
  .
  This package contains the Galera library/plugin.
 
-Package: galera-3-dbg
+Package: galera-4-dbg
 Architecture: any
 Section: debug
 Priority: extra
-Depends: galera-3 (= ${binary:Version}), ${misc:Depends}
-Description: debugging symbols for galera-3
- This package contains the debugging symbols for galera-3.
+Depends: galera-4 (= ${binary:Version}), ${misc:Depends}
+Description: debugging symbols for galera-4
+ This package contains the debugging symbols for galera-4.
 
-Package: galera-arbitrator-3
+Package: galera-arbitrator-4
 Architecture: any
-Conflicts: garbd-2, garbd2, percona-xtradb-cluster-garbd-2.x
+Conflicts: garbd-2,
+           garbd2,
+           percona-xtradb-cluster-garbd-2.x,
+           galera-arbitrator-3
 Breaks: percona-xtradb-cluster-galera-2.x
 Replaces: percona-xtradb-cluster-galera-2.x
 Depends: ${misc:Depends}, ${shlibs:Depends}
@@ -60,11 +72,11 @@ Description: Galera arbitrator daemon
  .
  This package contains the Galera arbitrator daemon (garbd).
 
-Package: galera-arbitrator-3-dbg
+Package: galera-arbitrator-4-dbg
 Architecture: any
 Section: debug
 Priority: extra
 Conflicts: percona-xtradb-cluster-galera-2.x-dbg
-Depends: galera-arbitrator-3 (= ${binary:Version}), ${misc:Depends}
-Description: debugging symbols for galera-arbitrator-3
- This package contains the debugging symbols for galera-arbitrator-3.
+Depends: galera-arbitrator-4 (= ${binary:Version}), ${misc:Depends}
+Description: debugging symbols for galera-arbitrator-4
+ This package contains the debugging symbols for galera-arbitrator-4.

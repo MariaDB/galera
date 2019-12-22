@@ -34,16 +34,31 @@ namespace gcache
 
         void* malloc  (size_type size);
 
+        void* realloc (void* ptr, size_type size);
+
         void  free    (BufferHeader* bh);
 
-        void* realloc (void* ptr, size_type size);
+        void repossess(BufferHeader* bh)
+        {
+            assert(bh->size > 0);
+            assert(bh->seqno_g != SEQNO_NONE);
+            assert(bh->store == BUFFER_IN_RB);
+            assert(bh->ctx == reinterpret_cast<BH_ctx_t>(this));
+            assert(BH_is_released(bh)); // will be marked unreleased by caller
+
+            size_used_ += bh->size;
+            assert(size_used_ <= size_cache_);
+        }
 
         void  discard (BufferHeader* const bh)
         {
             assert (BH_is_released(bh));
-            assert (SEQNO_ILL == bh->seqno_g);
+            assert (BUFFER_IN_RB == bh->store);
+
             size_free_ += bh->size;
             assert (size_free_ <= size_cache_);
+
+            bh->seqno_g = SEQNO_ILL;
         }
 
         size_t size      () const { return size_cache_; }

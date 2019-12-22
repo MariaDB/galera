@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2015 Codership Oy <info@codership.com>
+ * Copyright (C) 2010-2017 Codership Oy <info@codership.com>
  */
 
 /*! @file memory operations interface */
@@ -9,6 +9,7 @@
 
 #include <gu_arch.h>
 #include <gu_macros.h>
+#include <gu_limits.h> // GU_MIN_ALIGNMENT
 #include <stdint.h>
 
 namespace gcache
@@ -33,11 +34,14 @@ namespace gcache
         virtual void*
         malloc  (size_type size)          = 0;
 
+        virtual void*
+        realloc (void* ptr, size_type size) = 0;
+
         virtual void
         free    (BufferHeader* bh)        = 0;
 
-        virtual void*
-        realloc (void* ptr, size_type size) = 0;
+        virtual void
+        repossess(BufferHeader* bh)       = 0; /* "unfree" */
 
         virtual void
         discard (BufferHeader* bh)        = 0;
@@ -46,7 +50,7 @@ namespace gcache
         reset   ()                        = 0;
 
         /* GCache 3.x is not supposed to be portable between platforms */
-        static size_type const ALIGNMENT  = GU_WORD_BYTES;
+        static size_type const ALIGNMENT  = GU_MIN_ALIGNMENT;
 
         static inline size_type align_size(size_type s)
         {

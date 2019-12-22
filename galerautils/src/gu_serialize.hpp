@@ -178,6 +178,13 @@ namespace gu
     /*
      * Buffer length checking serialization template helpers
      */
+    GU_FORCE_INLINE void
+    check_bounds(size_t need, size_t have)
+    {
+        if (gu_unlikely(need > have))
+            throw SerializationException(need, have);
+    }
+
     template <typename TO, typename FROM>
     inline size_t
     serialize_helper(const FROM& f, void* const buf, size_t const buflen,
@@ -185,8 +192,7 @@ namespace gu
     {
         size_t const check(offset + sizeof(TO));
 
-        if (gu_unlikely(check > buflen))
-            throw SerializationException(check, buflen);
+        gu_trace(check_bounds(check, buflen));
 
         return serialize_helper<TO, FROM>(f, buf, offset);
     }
@@ -198,8 +204,7 @@ namespace gu
     {
         size_t const check(offset + sizeof(FROM));
 
-        if (gu_unlikely(check > buflen))
-            throw SerializationException(check, buflen);
+        gu_trace(check_bounds(check, buflen));
 
         return unserialize_helper<FROM, TO>(buf, offset, t);
     }
@@ -278,7 +283,7 @@ namespace gu
     }
 
     template <typename T>
-    GU_FORCE_INLINE size_t serialize8(const T&     t,
+    GU_FORCE_INLINE size_t serialize8(T   const t,
                                       void*  const buf,
                                       size_t const buflen,
                                       size_t const offset)
@@ -343,11 +348,14 @@ namespace gu
     {
         size_t const ret(offset + serial_size_helper<ST>(b));
 
-        if (gu_unlikely(ret > buflen)) throw SerializationException(ret, buflen);
+        gu_trace(check_bounds(ret, buflen));
 
         offset = serialize_helper<ST>(static_cast<ST>(b.size()),
                                       buf, buflen, offset);
-        std::copy(b.begin(), b.end(), static_cast<byte_t*>(buf) + offset);
+
+        // can't use void* in std::copy()
+        byte_t* const ptr(static_cast<byte_t*>(buf));
+        std::copy(b.begin(), b.end(), ptr + offset);
         return ret;
     }
 
@@ -361,14 +369,16 @@ namespace gu
         ST len(0);
         size_t ret(offset + sizeof(len));
 
-        if (gu_unlikely(ret > buflen)) throw SerializationException(ret, buflen);
+        gu_trace(check_bounds(ret, buflen));
 
         offset = unserialize_helper<ST>(buf, buflen, offset, len);
         ret += len;
 
-        if (gu_unlikely(ret > buflen)) throw SerializationException(ret, buflen);
+        gu_trace(check_bounds(ret, buflen));
 
         b.resize(len);
+
+        // can't use void* in std::copy()
         const byte_t* const ptr(static_cast<const byte_t*>(buf));
         std::copy(ptr + offset, ptr + ret, b.begin());
 

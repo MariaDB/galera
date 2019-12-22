@@ -7,8 +7,23 @@
 #include "gcs_group.hpp"
 #include "gcs_gcache.hpp"
 #include "gcs_priv.hpp"
+#include "gcs_code_msg.hpp"
+
+#include <gu_logger.hpp>
+#include <gu_macros.hpp>
+#include <gu_unordered.hpp>
 
 #include <errno.h>
+
+#include <limits>
+
+std::string const GCS_VOTE_POLICY_KEY("gcs.vote_policy");
+uint8_t     const GCS_VOTE_POLICY_DEFAULT(0);
+
+void gcs_group_register(gu::Config* cnf)
+{
+    cnf->add(GCS_VOTE_POLICY_KEY);
+}
 
 const char* gcs_group_state_str[GCS_GROUP_STATE_MAX] =
 {
@@ -18,8 +33,23 @@ const char* gcs_group_state_str[GCS_GROUP_STATE_MAX] =
     "PRIMARY"
 };
 
+
+uint8_t gcs_group_conf_to_vote_policy(gu::Config& cnf)
+{
+    int64_t i(cnf.get(GCS_VOTE_POLICY_KEY, int64_t(GCS_VOTE_POLICY_DEFAULT)));
+
+    if (i < 0 || i >= std::numeric_limits<uint8_t>::max())
+    {
+        log_warn << "Bogus '" << GCS_VOTE_POLICY_KEY << "' from config: " << i
+                 << ". Reverting to default."; // or throw?
+        return GCS_VOTE_POLICY_DEFAULT;
+    }
+
+    return i;
+}
+
 int
-gcs_group_init (gcs_group_t* group, gcache_t* const cache,
+gcs_group_init (gcs_group_t* group, gu::Config* const cnf, gcache_t* const cache,
                 const char* node_name, const char* inc_addr,
                 gcs_proto_t const gcs_proto_ver, int const repl_proto_ver,
                 int const appl_proto_ver)
@@ -30,27 +60,23 @@ gcs_group_init (gcs_group_t* group, gcache_t* const cache,
     group->conf_id      = GCS_SEQNO_ILL;
     group->state_uuid   = GU_UUID_NIL;
     group->group_uuid   = GU_UUID_NIL;
-    group->num          = 1; // this must be removed (#474)
-    group->my_idx       = 0; // this must be -1 (#474)
+    group->num          = 0;
+    group->my_idx       = -1;
     group->my_name      = strdup(node_name ? node_name : NODE_NO_NAME);
     group->my_address   = strdup(inc_addr  ? inc_addr  : NODE_NO_ADDR);
     group->state        = GCS_GROUP_NON_PRIMARY;
-    group->last_applied = GCS_SEQNO_ILL; // mark for recalculation
+    group->last_applied = group->act_id_;
     group->last_node    = -1;
+    group->vote_request_seqno = GCS_NO_VOTE_SEQNO;
+    group->vote_result  = (VoteResult){ GCS_NO_VOTE_SEQNO, 0 };
+    group->vote_history = new VoteHistory;
+    group->vote_policy  = gcs_group_conf_to_vote_policy(*cnf);
     group->frag_reset   = true; // just in case
-    group->nodes        = GU_CALLOC(group->num, gcs_node_t); // this must be removed (#474)
-
-    if (!group->nodes) return -ENOMEM; // this should be removed (#474)
-
-    /// this should be removed (#474)
-    gcs_node_init (&group->nodes[group->my_idx], group->cache, NODE_NO_ID,
-                   group->my_name, group->my_address, gcs_proto_ver,
-                   repl_proto_ver, appl_proto_ver, 0);
-
-    group->prim_uuid  = GU_UUID_NIL;
-    group->prim_seqno = GCS_SEQNO_ILL;
-    group->prim_num   = 0;
-    group->prim_state = GCS_NODE_STATE_NON_PRIM;
+    group->nodes        = NULL;
+    group->prim_uuid    = GU_UUID_NIL;
+    group->prim_seqno   = GCS_SEQNO_ILL;
+    group->prim_num     = 0;
+    group->prim_state   = GCS_NODE_STATE_NON_PRIM;
     group->prim_gcs_ver  = 0;
     group->prim_repl_ver = 0;
     group->prim_appl_ver = 0;
@@ -67,25 +93,26 @@ gcs_group_init (gcs_group_t* group, gcache_t* const cache,
 }
 
 int
-gcs_group_init_history (gcs_group_t*     group,
-                        gcs_seqno_t      seqno,
-                        const gu_uuid_t* uuid)
+gcs_group_init_history (gcs_group_t*    group,
+                        const gu::GTID& gtid)
 {
-    bool const negative_seqno(seqno < 0);
-    bool const nil_uuid(!gu_uuid_compare (uuid, &GU_UUID_NIL));
+    bool const negative_seqno(gtid.seqno() < 0);
+    bool const nil_uuid(gtid.uuid() == GU_UUID_NIL);
 
     if (negative_seqno && !nil_uuid) {
-        gu_error ("Non-nil history UUID with negative seqno (%lld) makes "
-                  "no sense.", (long long) seqno);
+        log_error << "Non-nil history UUID with negative seqno makes no sense: "
+                  << gtid;
         return -EINVAL;
     }
     else if (!negative_seqno && nil_uuid) {
-        gu_error ("Non-negative state seqno requires non-nil history UUID.");
+        log_error <<"Non-negative state seqno requires non-nil history UUID: "
+                  << gtid;
         return -EINVAL;
     }
 
-    group->act_id_    = seqno;
-    group->group_uuid = *uuid;
+    group->act_id_    = gtid.seqno();
+    group->last_applied = group->act_id_;
+    group->group_uuid = gtid.uuid()();
     return 0;
 }
 
@@ -113,6 +140,7 @@ group_nodes_init (const gcs_group_t* group, const gcs_comp_msg_t* comp)
                                group->gcs_proto_ver, group->repl_proto_ver,
                                group->appl_proto_ver, memb->segment);
             }
+            assert(ret[i].last_applied == GCS_SEQNO_NIL);
         }
     }
     else {
@@ -146,6 +174,7 @@ gcs_group_free (gcs_group_t* group)
     if (group->my_name)    free ((char*)group->my_name);
     if (group->my_address) free ((char*)group->my_address);
     group_nodes_free (group);
+    delete group->vote_history;
 }
 
 /* Reset nodes array without breaking the statistics */
@@ -166,26 +195,39 @@ group_nodes_reset (gcs_group_t* group)
     group->frag_reset = true;
 }
 
+/*! @return false
+ *  if the node is arbitrator and must not be counted in commit cut */
+static inline bool
+group_count_arbitrator(const gcs_group_t& group, const gcs_node_t& node)
+{
+    return (!(group.quorum.gcs_proto_ver > 0 && node.arbitrator));
+}
+
+/*! @return true if the node should be counted in commit cut calculations */
+static inline bool
+group_count_last_applied(const gcs_group_t& group, const gcs_node_t& node)
+{
+    return (node.count_last_applied && group_count_arbitrator(group, node));
+}
+
 /* Find node with the smallest last_applied */
 static inline void
 group_redo_last_applied (gcs_group_t* group)
 {
-    long       n;
-    long       last_node    = -1;
     gu_seqno_t last_applied = GU_LLONG_MAX;
+    int        last_node    = -1;
+    int        n;
 
     for (n = 0; n < group->num; n++) {
         const gcs_node_t* const node = &group->nodes[n];
         gcs_seqno_t const seqno = node->last_applied;
-        bool count = node->count_last_applied;
 
-        if (gu_unlikely (0 == group->last_applied_proto_ver)) {
-            /* @note: this may be removed after quorum v1 is phased out */
-            count = (GCS_NODE_STATE_SYNCED == node->status ||
-                     GCS_NODE_STATE_DONOR  == node->status);
-        }
+        assert( 0  < group->last_applied_proto_ver ||
+               -1 == group->last_applied_proto_ver /* for unit tests */);
 
-//        gu_debug ("last_applied[%ld]: %lld", n, seqno);
+        log_debug << "last_last_applied[" << n << "]: "
+                  << node->id << ", " << node->last_applied << ", "
+                  << (group_count_last_applied(*group, *node) ? "yes" : "no");
 
         /* NOTE: It is crucial for consistency that last_applied algorithm
          *       is absolutely identical on all nodes. Therefore for the
@@ -193,24 +235,53 @@ group_redo_last_applied (gcs_group_t* group)
          *       non-blocking donor.
          *       GCS_BLOCKING_DONOR should never be defined unless in some
          *       very custom builds. Commenting it out for safety sake. */
-//#ifndef GCS_BLOCKING_DONOR
-        if (count
-//#else
-//        if ((GCS_NODE_STATE_SYNCED == node->status) /* ignore donor */
-//#endif
-            && (seqno < last_applied)) {
-            assert (seqno >= 0);
-            last_applied = seqno;
-            last_node    = n;
+#ifndef GCS_BLOCKING_DONOR
+        if (group_count_last_applied(*group, *node)
+#else
+        if ((GCS_NODE_STATE_SYNCED == node->status) /* ignore donor */
+#endif
+            && (seqno <= last_applied)) {
+#ifndef NDEBUG
+            if (seqno > 0 && seqno < group->last_applied)
+            {
+                log_info << "Node:\n" << *node
+                         << "\nattempts to set last_applied to " << seqno
+                         << " below the current " << group->last_applied;
+            }
+#endif /* NDEBUG */
+            if (seqno >= group->last_applied || group->quorum.gcs_proto_ver < 2)
+            {
+                last_applied = seqno;
+                last_node    = n;
+            }
+            else if (seqno < group->last_applied)
+            {
+                if (0 != seqno)
+                {
+                    log_debug << "Last applied: " << seqno
+                              << " at node " << node->id
+                              << " is less than group last applied: "
+                              << group->last_applied;
+                    /* This is a possible situation since we allow for
+                     * the non-determinism in the last applied reporting.
+                     * Even a synced node can report a slightly lower number
+                     * depending on when it decides to report. */
+                }
+                // the node has not yet reported its last applied
+            }
         }
         // extra diagnostic, ignore
         //else if (!count) { gu_warn("not counting %d", n); }
     }
 
     if (gu_likely (last_node >= 0)) {
+        assert(last_applied >= group->last_applied ||
+               group->quorum.gcs_proto_ver < 2);
         group->last_applied = last_applied;
         group->last_node    = last_node;
     }
+
+    log_debug << "final last_applied: " << group->last_applied;
 }
 
 static void
@@ -316,6 +387,7 @@ group_post_state_exchange (gcs_group_t* group)
               GU_UUID_ARGS(&group->state_uuid));
 
     gcs_state_msg_get_quorum (states, group->num, quorum);
+    assert(quorum->version >= 2);
 
     if (quorum->version >= 0) {
         if (quorum->version < 2) {
@@ -348,6 +420,7 @@ group_post_state_exchange (gcs_group_t* group)
                          "Data loss is possible. Aborting.",
                          (long long)group->act_id_, (long long)quorum->act_id,
                          (long long)(group->act_id_ - quorum->act_id));
+                assert(0);
                 gu_abort();
             }
             group->state      = GCS_GROUP_PRIMARY;
@@ -356,6 +429,12 @@ group_post_state_exchange (gcs_group_t* group)
             group->group_uuid = quorum->group_uuid;
             group->prim_uuid  = group->state_uuid;
             group->state_uuid = GU_UUID_NIL;
+
+            if (quorum->gcs_proto_ver >= 2) // see below for older version
+            {
+                assert(quorum->last_applied >= 0);
+                group->last_applied = quorum->last_applied;
+            }
         }
         else {
             // no state exchange happend, processing old state messages
@@ -379,6 +458,12 @@ group_post_state_exchange (gcs_group_t* group)
         GROUP_UPDATE_PROTO_VER(repl);
         GROUP_UPDATE_PROTO_VER(appl);
 #undef GROUP_UPDATE_PROTO_VER
+
+        if (quorum->gcs_proto_ver < 2) // see above for newer version
+        {
+            group_redo_last_applied(group);
+        }
+        // votes will be recounted on CC action creation
     }
     else {
         // non-primary configuration
@@ -393,6 +478,7 @@ group_post_state_exchange (gcs_group_t* group)
              "\n\tact_id     = %lld,"
              "\n\tlast_appl. = %lld,"
              "\n\tprotocols  = %d/%d/%d (gcs/repl/appl),"
+             "\n\tvote policy= %d,"
              "\n\tgroup UUID = " GU_UUID_FORMAT,
              quorum->version,
              quorum->primary ? "PRIMARY" : "NON-PRIMARY",
@@ -402,6 +488,7 @@ group_post_state_exchange (gcs_group_t* group)
              group->last_applied,
              quorum->gcs_proto_ver, quorum->repl_proto_ver,
              quorum->appl_proto_ver,
+             int(quorum->vote_policy),
              GU_UUID_ARGS(&quorum->group_uuid));
 
     if (quorum->primary) group_check_proto_ver(group);
@@ -464,35 +551,40 @@ gcs_group_handle_comp_msg (gcs_group_t* group, const gcs_comp_msg_t* comp)
     }
     else {
         // Self-leave message
-        gu_info ("Received self-leave message.");
+        gu_info ("New SELF-LEAVE.");
         assert (0 == new_nodes_num);
         assert (!prim_comp);
     }
+
+    bool my_bootstrap(bootstrap);
 
     if (prim_comp) {
         /* Got PRIMARY COMPONENT - Hooray! */
         assert (new_my_idx >= 0);
         if (group->state == GCS_GROUP_PRIMARY) {
             /* we come from previous primary configuration, relax */
+            assert(group->my_idx >= 0);
+            my_bootstrap = group->nodes[group->my_idx].bootstrap;
         }
-        else if (bootstrap)
+        else if (bootstrap && gu_uuid_compare(&group->group_uuid,
+                                              &GU_UUID_NIL))
         {
             /* Is there need to initialize something else in this case? */
-            group->nodes[group->my_idx].bootstrap = true;
+            my_bootstrap = true;
         }
         else {
             const bool first_component =
 #ifndef GCS_CORE_TESTING
-            (1 == group->num) && !strcmp (NODE_NO_ID, group->nodes[0].id);
+                (0 == group->num) || bootstrap;
 #else
-            (1 == group->num);
+                (0 == group->num);
 #endif
-
             if (1 == new_nodes_num && first_component) {
                 /* bootstrap new configuration */
                 assert (GCS_GROUP_NON_PRIMARY == group->state);
-                assert (1 == group->num);
-                assert (0 == group->my_idx);
+                assert ((0 == group->num && -1 == group->my_idx) ||
+                        /* if first comp was non prim due to group expulsion */
+                        (1 == group->num &&  0 == group->my_idx));
 
                 // This bootstraps initial primary component for state exchange
                 gu_uuid_generate (&group->prim_uuid, NULL, 0);
@@ -507,14 +599,12 @@ gcs_group_handle_comp_msg (gcs_group_t* group, const gcs_comp_msg_t* comp)
                     gu_info ("Starting new group from scratch: " GU_UUID_FORMAT,
                              GU_UUID_ARGS(&group->group_uuid));
                 }
-// the following should be removed under #474
-                group->nodes[0].status = GCS_NODE_STATE_JOINED;
-                /* initialize node ID to the one given by the backend - this way
-                 * we'll be recognized as coming from prev. conf. in node array
-                 * remap below */
-                strncpy (group->nodes[0].id, new_nodes[0].id,
-                         sizeof (group->nodes[0].id));
-                group->nodes[0].segment = new_nodes[0].segment;
+
+                group->last_applied = group->act_id_;
+                assert(group->last_applied >= 0);
+
+                new_nodes[0].status = GCS_NODE_STATE_JOINED;
+                new_nodes[0].last_applied = group->last_applied;
             }
         }
     }
@@ -546,6 +636,11 @@ gcs_group_handle_comp_msg (gcs_group_t* group, const gcs_comp_msg_t* comp)
     group->num    = new_nodes_num;
     group->nodes  = new_nodes;
 
+    assert(group->num > 0 || group->my_idx < 0);
+    assert(group->my_idx >= 0 || group->num == 0);
+
+    if (group->my_idx >= 0) group->nodes[group->my_idx].bootstrap = my_bootstrap;
+
     if (gcs_comp_msg_primary(comp) || bootstrap) {
         /* TODO: for now pretend that we always have new nodes and perform
          * state exchange because old states can carry outdated node status.
@@ -567,7 +662,12 @@ gcs_group_handle_comp_msg (gcs_group_t* group, const gcs_comp_msg_t* comp)
                 group_post_state_exchange (group);
             }
         }
-        group_redo_last_applied (group);
+
+        if (group->quorum.gcs_proto_ver < 2)
+        {
+            // commit cut recomputation should happen only after state exchange
+            group_redo_last_applied (group);
+        }
     }
 
     return group->state;
@@ -580,7 +680,6 @@ gcs_group_handle_uuid_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
 
     if (GCS_GROUP_WAIT_STATE_UUID == group->state &&
         0 == msg->sender_idx /* check that it is from the representative */) {
-//        group->state_uuid = *(gu_uuid_t*)msg->buf;
         gu_uuid_copy(&group->state_uuid, (const gu_uuid_t*)msg->buf);
         group->state = GCS_GROUP_WAIT_STATE_MSG;
     }
@@ -611,6 +710,8 @@ gcs_group_handle_state_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
         gcs_state_msg_t* state = gcs_state_msg_read (msg->buf, msg->size);
 
         if (state) {
+            char state_str[1024];
+            gcs_state_msg_snprintf(state_str, sizeof(state_str), state);
 
             const gu_uuid_t* state_uuid = gcs_state_msg_uuid (state);
 
@@ -619,6 +720,7 @@ gcs_group_handle_state_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
                 gu_info ("STATE EXCHANGE: got state msg: " GU_UUID_FORMAT
                          " from %d (%s)", GU_UUID_ARGS(state_uuid),
                          msg->sender_idx, gcs_state_msg_name(state));
+                gu_debug("%s", state_str);
 
                 if (gu_log_debug) group_print_state_debug(state);
 
@@ -632,6 +734,7 @@ gcs_group_handle_state_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
                           GU_UUID_ARGS(state_uuid),
                           msg->sender_idx, gcs_state_msg_name(state),
                           GU_UUID_ARGS(&group->state_uuid));
+                gu_debug ("%s", state_str);
 
                 if (gu_log_debug) group_print_state_debug(state);
 
@@ -647,25 +750,76 @@ gcs_group_handle_state_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
     return group->state;
 }
 
+/* this is a helper function that takes care of preper interpretation of the
+ * code message depending on the protocol version used.
+ * @return 0 - success, -EMSGSIZE - wrong message size, -EINVAL - wrong group */
+int
+group_unserialize_code_msg(gcs_group_t* group, const gcs_recv_msg_t* msg,
+                           gu::GTID& gtid, int64_t& code)
+{
+    if (gu_likely(group->gcs_proto_ver >= 1 &&
+                  msg->size >= gcs::core::CodeMsg::serial_size()))
+    {
+        const gcs::core::CodeMsg* const cm
+            (static_cast<const gcs::core::CodeMsg*>(msg->buf));
+
+        cm->unserialize(gtid, code);
+
+        if (gu_unlikely(gtid.uuid() != group->group_uuid))
+        {
+            log_info << gcs_msg_type_string[msg->type] << " message " << *cm
+                     << " from another group (" << gtid.uuid()
+                     << "). Dropping message.";
+            return -EINVAL;
+        }
+    }
+    else // gcs_seqno_t
+    {
+        if (gu_likely(msg->size == sizeof(gcs_seqno_t)))
+        {
+            gtid.set(gu::gtoh(*(static_cast<const gcs_seqno_t*>(msg->buf))));
+            code = 0;
+        }
+        else
+        {
+            log_warn << "Bogus size for " << gcs_msg_type_string[msg->type]
+                     << " message: " << msg->size << " bytes. Dropping message.";
+            return -EMSGSIZE;
+        }
+    }
+
+    return 0;
+}
+
 /*! Returns new last applied value if it has changes, 0 otherwise */
 gcs_seqno_t
 gcs_group_handle_last_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
 {
-    gcs_seqno_t seqno;
+    assert (GCS_MSG_LAST == msg->type);
 
-    assert (GCS_MSG_LAST        == msg->type);
-    assert (sizeof(gcs_seqno_t) == msg->size);
+    gu::GTID gtid;
+    int64_t  code;
 
-    seqno = gcs_seqno_gtoh(*(gcs_seqno_t*)(msg->buf));
+    if (gu_unlikely(group_unserialize_code_msg(group, msg, gtid,code))) return 0;
+
+    if (gu_unlikely(0 != code))
+    {
+        log_warn << "Bogus " << gcs_msg_type_string[msg->type]
+                 << " message code: " << code <<". Ignored.";
+        assert(0);
+        return 0;
+    }
 
     // This assert is too restrictive. It requires application to send
     // last applied messages while holding TO, otherwise there's a race
     // between threads.
     // assert (seqno >= group->last_applied);
 
-    gcs_node_set_last_applied (&group->nodes[msg->sender_idx], seqno);
+    gcs_node_set_last_applied (&group->nodes[msg->sender_idx], gtid.seqno());
+    assert(group->nodes[msg->sender_idx].last_applied >= 0);
 
-    if (msg->sender_idx == group->last_node && seqno > group->last_applied) {
+    if (msg->sender_idx == group->last_node   &&
+        gtid.seqno()    >  group->last_applied) {
         /* node that was responsible for the last value, has changed it.
          * need to recompute it */
         gcs_seqno_t old_val = group->last_applied;
@@ -675,12 +829,260 @@ gcs_group_handle_last_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
         if (old_val < group->last_applied) {
             gu_debug ("New COMMIT CUT %lld after %lld from %d",
                       (long long)group->last_applied,
-                      (long long)seqno, msg->sender_idx);
+                      (long long)gtid.seqno(), msg->sender_idx);
             return group->last_applied;
         }
     }
 
     return 0;
+}
+
+/*! @return true if the node's vote must be counted */
+static inline bool
+group_count_votes(const gcs_node_t& node)
+{
+    return (node.count_last_applied && !node.arbitrator);
+}
+
+/* true if last vote was updated, false if not */
+static bool
+group_recount_votes (gcs_group_t& group)
+{
+    typedef std::pair<uint64_t, int> VoteEntry;
+    typedef std::map<uint64_t, int>  VoteCounts; //we want it consistently sorted
+    typedef VoteCounts::const_iterator VoteCountsIt;
+
+    bool voting(false);
+    gcs_seqno_t voting_seqno(group.act_id_);
+
+    for (int n(0); n < group.num; ++n)
+    {
+        const gcs_node_t& node(group.nodes[n]);
+
+        if (group_count_votes(node) &&
+            node.vote_seqno > group.vote_result.seqno)
+        {
+            voting = true;
+            if (node.vote_seqno < voting_seqno) voting_seqno = node.vote_seqno;
+        }
+    }
+
+    if (!voting) return false; /* this can happen on config. change */
+
+    VoteCounts vc;
+    int n_votes(0);
+    int voters(0);
+
+    for (int n(0); n < group.num; ++n)
+    {
+        gcs_node_t& node(group.nodes[n]);
+
+        if (group_count_votes(node) || node.last_applied >= voting_seqno)
+        {
+            ++voters;
+
+            if (node.vote_seqno   >= voting_seqno ||
+                node.last_applied >= voting_seqno)
+            {
+                ++n_votes;
+
+                /* If a node has voted on seqno > voting_seqno or
+                 * reported last appied on a seqno >= voting_seqno,
+                 * then its vote for the voting_seqno is 0 (success) */
+                uint64_t const vote
+                    (node.vote_seqno == voting_seqno ? node.vote_res : 0);
+
+                vc.insert(VoteEntry(vote, 0)).first->second++;
+            }
+        }
+        else
+        {
+            log_debug << "Excluding node from voters: " << node;
+        }
+    }
+
+    assert(n_votes > 0);
+
+    gu::GTID const vote_gtid(group.group_uuid, voting_seqno);
+    std::ostringstream diag;
+    diag << "Votes over " << vote_gtid << ":\n";
+
+    int max_count(0);
+    int second_max(0);
+    int zero_count(0);
+    uint64_t max_vote(0);
+#ifndef NDEBUG
+    int counts(0);
+#endif
+    for (VoteCountsIt it(vc.begin()); it != vc.end(); ++it)
+    {
+        assert(it->second > 0);
+
+        if (0 == it->first) zero_count = it->second;
+
+        if (it->second >= max_count)
+        {
+            second_max = max_count;
+            max_vote   = it->first;
+            max_count  = it->second;
+        }
+#ifndef NDEBUG
+        counts += it->second;
+#endif
+        diag << "   " << gu::PrintBase<>(it->first) << ": "
+             << std::setfill(' ') << std::setw(3) << it->second << '/'
+             << std::setw(0) << voters << "\n";
+    }
+    assert(counts == n_votes);
+    assert(zero_count <= max_count);
+
+    int const missing(voters - n_votes);
+
+    uint64_t win_vote;
+    if (group.quorum.vote_policy > 0 &&
+        zero_count >= int(group.quorum.vote_policy))
+    {
+        win_vote = 0;
+    }
+    else if ((0 == group.quorum.vote_policy ||
+              (zero_count + missing < int(group.quorum.vote_policy))) &&
+             /* what is happening here: for zero vote to win it must be >=
+              * than any other vote. Which requires any other vote to be
+              * STRICTLY > in case zero count is the second runner up. Yet
+              * it is sufficient to be >= otherwise. */
+             (zero_count >= second_max + missing /* zero_count == max_count */||
+              max_count  >= second_max + missing + (zero_count == second_max)))
+    {
+        /* even if received, missing votes won't win over current max */
+        win_vote = (zero_count >= max_count ? 0 : max_vote);
+    }
+    else
+    {
+        diag << "Waiting for more votes.";
+        log_info << diag.str();
+        assert(missing > 0);
+        return false;;
+    }
+
+    diag << "Winner: " << gu::PrintBase<>(win_vote);
+    log_info << diag.str();
+
+    group.vote_result.seqno = voting_seqno;
+    group.vote_result.res   = win_vote;
+
+    const gcs_node_t& this_node(group.nodes[group.my_idx]);
+    if (this_node.vote_seqno < voting_seqno)
+    {
+        // record voting result in the history for later
+        std::pair<gu::GTID,int64_t> const val(vote_gtid, win_vote);
+        std::pair<VoteHistory::iterator, bool> const res
+                    (group.vote_history->insert(val));
+        if (false == res.second)
+        {
+            assert(0);
+            res.first->second = group.vote_result.res;
+        }
+    }
+
+    return true;
+}
+
+VoteResult
+gcs_group_handle_vote_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
+{
+    assert (GCS_MSG_VOTE == msg->type);
+
+    gu::GTID gtid;
+    int64_t  code;
+
+    gcs_node_t& sender(group->nodes[msg->sender_idx]);
+
+    if (gu_unlikely(group_unserialize_code_msg(group, msg, gtid, code)))
+    {
+        log_warn << "Failed to deserialize vote msg from " << msg->sender_idx
+                 << " (" << sender.name << ")";
+        VoteResult const ret = { GCS_NO_VOTE_SEQNO, 0 };
+        return ret;
+    }
+
+    if (gtid.uuid() == group->group_uuid &&
+        gtid.seqno() > group->vote_result.seqno)
+    {
+        const char* const data
+            (gcs::core::CodeMsg::serial_size() < msg->size ?
+             (static_cast<char*>(msg->buf) + gcs::core::CodeMsg::serial_size()) :
+             NULL);
+
+        /* voting on this seqno has not completed yet */
+        log_info << "Member " << msg->sender_idx << '(' << sender.name << ") "
+                 << (code ? "initiates" : "responds to") << " vote on "
+                 << gtid << ',' << gu::PrintBase<>(code) << ": "
+                 << (code ? (data ? data : "(null)") : "Success");
+
+        gcs_node_set_vote (&sender, gtid.seqno(), code);
+
+        if (group_recount_votes(*group))
+        {
+            /* What if group->vote_result.seqno < gtid.seqno()?
+             * - that means that there is inconsistency between the sender and
+             * the member who initiated voting on vote_result.seqno. This in turn
+             * means that there will be a configuration change that will trigger
+             * another votes recount, and then another configuration change
+             * - until we reach gtid.senqo() */
+            if (group->nodes[group->my_idx].vote_seqno >=
+                group->vote_result.seqno)
+            {
+                return group->vote_result;
+            }
+        }
+        else if (gtid.seqno() > group->vote_request_seqno)
+        {
+            group->vote_request_seqno = gtid.seqno();
+            if (msg->sender_idx != group->my_idx)
+            {
+                VoteResult const ret = { gtid.seqno(), GCS_VOTE_REQUEST };
+                return ret;
+            }
+        }
+    }
+    else if (msg->sender_idx == group->my_idx)
+    {
+        std::ostringstream msg;
+        msg << "Recovering vote result from history: " << gtid;
+
+        int64_t result(0);
+        VoteHistory::iterator it(group->vote_history->find(gtid));
+        if (group->vote_history->end() != it)
+        {
+            result = it->second;
+            group->vote_history->erase(it);
+            msg << ',' << gu::PrintBase<>(result);
+        }
+        else
+        {
+            msg << ": not found";
+            assert(code < 0);
+            /* by default result is 0, which means success/no voting happened,
+             * and this node is the only inconsistent one. */
+        }
+
+        log_info << msg.str();
+
+        VoteResult const ret = { gtid.seqno(), result };
+        return ret; // this should wake up the thread that voted
+    }
+    else if (gtid.seqno() > group->vote_result.seqno)
+    {
+        /* outdated vote from another member, ignore */
+        log_info << "Outdated vote "
+                 << gu::PrintBase<>(code) << " for " << gtid;
+        log_info << "(last group vote was on: "
+                 << gu::GTID(group->group_uuid, group->vote_result.seqno) << ','
+                 << gu::PrintBase<>(group->vote_result.res) << ')';
+    }
+
+    VoteResult const ret = { GCS_NO_VOTE_SEQNO, 0 };  // no action required
+    return ret;
 }
 
 /*! return true if this node is the sender to notify the calling thread of
@@ -693,13 +1095,14 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
 
     assert (GCS_MSG_JOIN == msg->type);
 
-    // TODO: define an explicit type for the join message, like gcs_join_msg_t
-    assert (msg->size == sizeof(gcs_seqno_t));
+    gu::GTID gtid;
+    int64_t  code;
+
+    if (gu_unlikely(group_unserialize_code_msg(group, msg, gtid,code))) return 0;
 
     if (GCS_NODE_STATE_DONOR  == sender->status ||
         GCS_NODE_STATE_JOINER == sender->status) {
         int j;
-        gcs_seqno_t seqno     = gcs_seqno_gtoh(*(gcs_seqno_t*)msg->buf);
         gcs_node_t* peer      = NULL;
         const char* peer_id   = NULL;
         const char* peer_name = "left the group";
@@ -736,7 +1139,7 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
                 group->prim_num++;
             }
             else {
-                if (seqno >= 0) {
+                if (code >= 0) {
                     sender->status = GCS_NODE_STATE_JOINED;
                     group->prim_num++;
                 }
@@ -762,11 +1165,11 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
             gu_warn ("Could not find peer: %s", peer_id);
         }
 
-        if (seqno < 0) {
+        if (code < 0) {
             gu_warn ("%d.%d (%s): State transfer %s %d.%d (%s) failed: %d (%s)",
                      sender_idx, sender->segment, sender->name, st_dir,
                      peer_idx, peer ? peer->segment : -1, peer_name,
-                     (int)seqno, strerror((int)-seqno));
+                     (int)code, strerror((int)-code));
 
             if (from_donor && peer_idx == group->my_idx &&
                 GCS_NODE_STATE_JOINER == group->nodes[peer_idx].status) {
@@ -777,10 +1180,11 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
                 return -ENOTRECOVERABLE;
             }
 
+            assert(group->quorum.version >= 2);
             if (group->quorum.version < 2 && !from_donor && // #591
                 sender_idx == group->my_idx) {
                 // remove after quorum v1 is phased out
-                gu_fatal ("Faield to receive state. Need to abort.");
+                gu_fatal ("Failed to receive state. Need to abort.");
                 return -ENOTRECOVERABLE;
             }
         }
@@ -820,6 +1224,7 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
     return (sender_idx == group->my_idx);
 }
 
+/* @return true if this node is sender, false otherwise */
 int
 gcs_group_handle_sync_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
 {
@@ -828,15 +1233,20 @@ gcs_group_handle_sync_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
 
     assert (GCS_MSG_SYNC == msg->type);
 
+    gu::GTID gtid;
+    int64_t  code;
+
+    if (gu_unlikely(group_unserialize_code_msg(group, msg, gtid,code))) return 0;
+
     if (GCS_NODE_STATE_JOINED == sender->status ||
         /* #454 - at this layer we jump directly from DONOR to SYNCED */
         (0 == group->last_applied_proto_ver &&
          GCS_NODE_STATE_DONOR == sender->status)) {
 
         sender->status = GCS_NODE_STATE_SYNCED;
-        sender->count_last_applied = true;
+        sender->count_last_applied = group_count_arbitrator(*group, *sender);
 
-        group_redo_last_applied (group);//from now on this node must be counted
+        group_redo_last_applied (group); //from now on this node must be counted
 
         gu_info ("Member %d.%d (%s) synced with group.",
                  sender_idx, sender->segment, sender->name);
@@ -876,9 +1286,9 @@ group_node_is_stateful (const gcs_group_t* group, const gcs_node_t* node)
 }
 
 static int
-group_find_node_by_state (const gcs_group_t*     const group,
-                          int              const joiner_idx,
-                          gcs_node_state_t const status)
+group_find_node_by_state (const gcs_group_t* const group,
+                          int                const joiner_idx,
+                          gcs_node_state_t   const status)
 {
     gcs_segment_t const segment = group->nodes[joiner_idx].segment;
     int  idx;
@@ -892,12 +1302,14 @@ group_find_node_by_state (const gcs_group_t*     const group,
         gcs_node_t* node = &group->nodes[idx];
 
         if (node->status >= status && group_node_is_stateful (group, node))
+        {
             donor = idx; /* potential donor */
+        }
 
         if (segment == node->segment) {
             if (donor == idx) return donor; /* found suitable donor in the
                                              * same segment */
-            if (node->status >= GCS_NODE_STATE_JOINER) hnss = true;;
+            if (node->status >= GCS_NODE_STATE_JOINER) hnss = true;
         }
     }
 
@@ -1211,33 +1623,38 @@ gcs_group_find_donor(const gcs_group_t* group,
                      int const str_version,
                      int const joiner_idx,
                      const char* const donor_string, int const donor_len,
-                     const gu_uuid_t* ist_uuid, gcs_seqno_t ist_seqno)
+                     const gu::GTID& ist_gtid)
 {
     static gcs_node_state_t const min_donor_state = GCS_NODE_STATE_SYNCED;
 
     /* try to find ist donor first.
        if it fails, fallbacks to find sst donor*/
     int donor_idx = -1;
+
     if (str_version >= 2 &&
-        gu_uuid_compare(&group->group_uuid, ist_uuid) == 0)
+        ist_gtid.uuid() == group->group_uuid &&
+        ist_gtid.seqno() != GCS_SEQNO_ILL)
     {
-        assert (ist_seqno != GCS_SEQNO_ILL);
+        // FIXME: check if disabling the assertion and allowing ist_seqno to
+        // equal to GCS_SEQNO_ILL requires protocol upgrade
+        // assert(ist_seqno != GCS_SEQNO_ILL);
+
         donor_idx = group_find_ist_donor(group,
                                          str_version,
                                          joiner_idx,
                                          donor_string, donor_len,
-                                         ist_seqno,
+                                         ist_gtid.seqno(),
                                          min_donor_state);
     }
+
     if (donor_idx < 0)
     {
-        /* if donor_string is empty,
-           it will fallback to find_node_by_state() */
-        donor_idx = group_for_each_donor_in_string
-                (group, str_version, joiner_idx,
-                 donor_string, donor_len,
-                 min_donor_state);
+        /* if donor_string is empty, it will fallback to find_node_by_state() */
+        donor_idx = group_for_each_donor_in_string (group, str_version,
+                                                    joiner_idx, donor_string,
+                                                    donor_len, min_donor_state);
     }
+
     return donor_idx;
 }
 
@@ -1256,7 +1673,7 @@ group_select_donor (gcs_group_t* group,
                     int const str_version,
                     int const joiner_idx,
                     const char* const donor_string,
-                    const gu_uuid_t* ist_uuid, gcs_seqno_t ist_seqno,
+                    const gu::GTID& ist_gtid,
                     bool const desync)
 {
     static gcs_node_state_t const min_donor_state = GCS_NODE_STATE_SYNCED;
@@ -1279,11 +1696,8 @@ group_select_donor (gcs_group_t* group,
             donor_idx = -EAGAIN;
     }
     else {
-        donor_idx = gcs_group_find_donor(group,
-                                         str_version,
-                                         joiner_idx,
-                                         donor_string, donor_len,
-                                         ist_uuid, ist_seqno);
+        donor_idx = gcs_group_find_donor(group, str_version, joiner_idx,
+                                         donor_string, donor_len, ist_gtid);
     }
 
     if (donor_idx >= 0) {
@@ -1335,7 +1749,8 @@ group_select_donor (gcs_group_t* group,
 void
 gcs_group_ignore_action (gcs_group_t* group, struct gcs_act_rcvd* act)
 {
-    if (act->act.type <= GCS_ACT_STATE_REQ) {
+//    if (act->act.type <= GCS_ACT_STATE_REQ) {
+    if (act->act.type <= GCS_ACT_CCHANGE) {
         gcs_gcache_free (group->cache, act->act.buf);
     }
 
@@ -1360,35 +1775,42 @@ gcs_group_handle_state_request (gcs_group_t*         group,
                                 struct gcs_act_rcvd* act)
 {
     // pass only to sender and to one potential donor
-    const char*      donor_name     = (const char*)act->act.buf;
-    size_t           donor_name_len = strlen(donor_name);
+    const char* const donor_name    = (const char*)act->act.buf;
+    size_t const     donor_name_len = strlen(donor_name) + 1;
     int              donor_idx      = -1;
     int const        joiner_idx     = act->sender_idx;
     const char*      joiner_name    = group->nodes[joiner_idx].name;
     gcs_node_state_t joiner_status  = group->nodes[joiner_idx].status;
     bool const       desync         = group_desync_request (donor_name);
 
-    gu_uuid_t ist_uuid = {{0, }};
-    gcs_seqno_t ist_seqno = GCS_SEQNO_ILL;
+    gu::GTID ist_gtid;
     int str_version = 1; // actually it's 0 or 1.
 
-    if (act->act.buf_len != (ssize_t)(donor_name_len + 1) &&
-        donor_name[donor_name_len + 1] == 'V') {
-        str_version = (int)donor_name[donor_name_len + 2];
+    if (act->act.buf_len > (ssize_t)donor_name_len &&
+        donor_name[donor_name_len + 0] == 'V') {
+        str_version = (int)donor_name[donor_name_len + 1];
     }
 
     if (str_version >= 2) {
-        const char* ist_buf = donor_name + donor_name_len + 3;
-        memcpy(&ist_uuid, ist_buf, sizeof(ist_uuid));
-        ist_seqno = gcs_seqno_gtoh(*(gcs_seqno_t*)(ist_buf + sizeof(ist_uuid)));
+        size_t offset(donor_name_len + 2);
+
+        try
+        {
+            offset = ist_gtid.unserialize(act->act.buf, act->act.buf_len,offset);
+        }
+        catch (gu::Exception& e) {
+            log_warn << "Malformed state transfer request: " << e.what()
+                     << " Ignoring";
+            gcs_group_ignore_action(group, act);
+            return 0;
+        }
 
         // change act.buf's content to original version.
         // and it's safe to change act.buf_len
-        size_t head = donor_name_len + 3 + sizeof(ist_uuid) + sizeof(ist_seqno);
-        memmove((char*)act->act.buf + donor_name_len + 1,
-                (char*)act->act.buf + head,
-                act->act.buf_len - head);
-        act->act.buf_len -= sizeof(ist_uuid) + sizeof(ist_seqno) + 2;
+        ::memmove((char*)act->act.buf + donor_name_len,
+                  (char*)act->act.buf + offset,
+                  act->act.buf_len - offset);
+        act->act.buf_len -= offset - donor_name_len;
     }
 
     assert (GCS_ACT_STATE_REQ == act->act.type);
@@ -1413,10 +1835,8 @@ gcs_group_handle_state_request (gcs_group_t*         group,
         }
     }
 
-    donor_idx = group_select_donor(group,
-                                   str_version,
-                                   joiner_idx, donor_name,
-                                   &ist_uuid, ist_seqno, desync);
+    donor_idx = group_select_donor(group, str_version, joiner_idx, donor_name,
+                                   ist_gtid, desync);
 
     assert (donor_idx != joiner_idx || desync  || donor_idx < 0);
     assert (donor_idx == joiner_idx || !desync || donor_idx < 0);
@@ -1427,9 +1847,9 @@ gcs_group_handle_state_request (gcs_group_t*         group,
         return 0;
     }
     else if (group->my_idx == donor_idx) {
-        act->act.buf_len -= donor_name_len + 1;
+        act->act.buf_len -= donor_name_len;
         memmove (*(void**)&act->act.buf,
-                 ((char*)act->act.buf) + donor_name_len + 1,
+                 ((char*)act->act.buf) + donor_name_len,
                  act->act.buf_len);
         // now action starts with request, like it was supplied by application,
         // see gcs_request_state_transfer()
@@ -1444,27 +1864,11 @@ gcs_group_handle_state_request (gcs_group_t*         group,
     return act->act.buf_len;
 }
 
-static ssize_t
-group_memb_record_size (gcs_group_t* group)
-{
-    ssize_t ret = 0;
-    long idx;
-
-    for (idx = 0; idx < group->num; idx++) {
-        ret += strlen(group->nodes[idx].id) + 1;
-        ret += strlen(group->nodes[idx].name) + 1;
-        ret += strlen(group->nodes[idx].inc_addr) + 1;
-        ret += sizeof(gcs_seqno_t); // cached seqno
-    }
-
-    return ret;
-}
-
 /* Creates new configuration action */
 ssize_t
-gcs_group_act_conf (gcs_group_t*    group,
-                    struct gcs_act* act,
-                    int*            gcs_proto_ver)
+gcs_group_act_conf (gcs_group_t*         group,
+                    struct gcs_act_rcvd* rcvd,
+                    int*                 gcs_proto_ver)
 {
     // if (*gcs_proto_ver < group->quorum.gcs_proto_ver)
     //     *gcs_proto_ver = group->quorum.gcs_proto_ver; // only go up, see #482
@@ -1479,56 +1883,78 @@ gcs_group_act_conf (gcs_group_t*    group,
     // gcs requires resending message with correct gcs protocol version.
     *gcs_proto_ver = group->quorum.gcs_proto_ver;
 
-    ssize_t conf_size = sizeof(gcs_act_conf_t) + group_memb_record_size(group);
-    gcs_act_conf_t* conf = static_cast<gcs_act_conf_t*>(malloc (conf_size));
+    struct gcs_act_cchange conf;
 
-    if (conf) {
-        long idx;
+    if (GCS_GROUP_PRIMARY == group->state) {
+        if (group->quorum.gcs_proto_ver >= 1)
+        {
+            ++group->act_id_;
 
-        conf->seqno          = group->act_id_;
-        conf->conf_id        = group->conf_id;
-        conf->memb_num       = group->num;
-        conf->my_idx         = group->my_idx;
-        conf->repl_proto_ver = group->quorum.repl_proto_ver;
-        conf->appl_proto_ver = group->quorum.appl_proto_ver;
-
-        memcpy (conf->uuid, &group->group_uuid, sizeof (gu_uuid_t));
-
-        if (group->num) {
-            assert (conf->my_idx >= 0);
-
-            conf->my_state = group->nodes[group->my_idx].status;
-
-            char* ptr = &conf->data[0];
-            for (idx = 0; idx < group->num; idx++)
+            if (group_recount_votes(*group))
             {
-                strcpy (ptr, group->nodes[idx].id);
-                ptr += strlen(ptr) + 1;
-                strcpy (ptr, group->nodes[idx].name);
-                ptr += strlen(ptr) + 1;
-                strcpy (ptr, group->nodes[idx].inc_addr);
-                ptr += strlen(ptr) + 1;
-                gcs_seqno_t cached = gcs_node_cached(&group->nodes[idx]);
-                memcpy(ptr, &cached, sizeof(cached));
-                ptr += sizeof(cached);
+                conf.vote_seqno = group->vote_result.seqno;
+                conf.vote_res   = group->vote_result.res;
             }
         }
-        else {
-            // self leave message
-            assert (conf->conf_id < 0);
-            assert (conf->my_idx  < 0);
-            conf->my_state = GCS_NODE_STATE_NON_PRIM;
+        conf.seqno      = group->act_id_;
+    } else {
+        assert(GCS_GROUP_NON_PRIMARY == group->state);
+        conf.seqno      = GCS_SEQNO_ILL;
+    }
+
+    conf.conf_id        = group->conf_id;
+    conf.repl_proto_ver = group->quorum.repl_proto_ver;
+    conf.appl_proto_ver = group->quorum.appl_proto_ver;
+
+    memcpy (conf.uuid.data, &group->group_uuid, sizeof (gu_uuid_t));
+
+    if (group->num) {
+        assert (group->my_idx >= 0);
+
+        for (int idx = 0; idx < group->num; ++idx)
+        {
+            gcs_act_cchange::member m;
+
+            gu_uuid_scan(group->nodes[idx].id, strlen(group->nodes[idx].id),
+                         &m.uuid_);
+            m.name_     = group->nodes[idx].name;
+            m.incoming_ = group->nodes[idx].inc_addr;
+            m.cached_   = gcs_node_cached(&group->nodes[idx]);
+            m.state_    = group->nodes[idx].status;
+
+            conf.memb.push_back(m);
         }
-
-        act->buf     = conf;
-        act->buf_len = conf_size;
-        act->type    = GCS_ACT_CONF;
-
-        return conf_size;
     }
     else {
-        return -ENOMEM;
+        // self leave message
+        assert (conf.conf_id < 0);
+        assert (-1 == group->my_idx);
     }
+
+    void* tmp;
+    rcvd->act.buf_len = conf.write(&tmp); // throws when fails
+#ifndef GCS_FOR_GARB
+    /* copy CC event to gcache for IST */
+    rcvd->act.buf = gcache_malloc(group->cache, rcvd->act.buf_len);
+    if (rcvd->act.buf)
+    {
+        memcpy(const_cast<void*>(rcvd->act.buf), tmp, rcvd->act.buf_len);
+        rcvd->id = group->my_idx; // passing own index in seqno_g
+    }
+    else
+    {
+        rcvd->act.buf_len = -ENOMEM;
+        rcvd->id          = -ENOMEM;
+    }
+    free(tmp);
+#else
+    rcvd->act.buf = tmp;
+    rcvd->id = group->my_idx;
+#endif /* GCS_FOR_GARB */
+
+    rcvd->act.type = GCS_ACT_CCHANGE;
+
+    return rcvd->act.buf_len;
 }
 
 // for future use in fake state exchange (in unit tests et.al. See #237, #238)
@@ -1558,6 +1984,10 @@ group_get_node_state (const gcs_group_t* const group, long const node_idx)
         group->prim_seqno,
         group->act_id_,
         cached,
+        group->last_applied, // should be the same global property as act_id_
+        node->vote_seqno,
+        node->vote_res,
+        group->vote_policy,
         group->prim_num,
         group->prim_state,
         node->status,
@@ -1581,6 +2011,21 @@ gcs_group_get_state (const gcs_group_t* group)
     return group_get_node_state (group, group->my_idx);
 }
 
+int
+gcs_group_param_set(gcs_group_t& group,
+                    const std::string& key, const std::string& val)
+{
+    if (GCS_VOTE_POLICY_KEY == key)
+    {
+        gu_throw_error(ENOTSUP) << "Setting '" << key << "' in runtime may "
+            "have unintended consequences and is currently not supported. "
+            "Cluster voting policy should be decided on before starting the "
+            "cluster.";
+    }
+
+    return 1;
+}
+
 void
 gcs_group_get_status (const gcs_group_t* group, gu::Status& status)
 {
@@ -1599,5 +2044,4 @@ gcs_group_get_status (const gcs_group_t* group, gu::Status& status)
 
     status.insert("desync_count", gu::to_string(desync_count));
 }
-
 

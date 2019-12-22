@@ -60,7 +60,8 @@ namespace gu
 
         if (0 == err)
         {
-            unsigned long long  const free_size(stat.f_bavail * stat.f_bsize);
+            unsigned long long free_size = stat.f_bavail;
+            free_size *= stat.f_bsize;
 
             if (reserve < free_size)
             {

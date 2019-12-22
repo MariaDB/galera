@@ -9,9 +9,16 @@
 #include "gu_macros.h"
 #include "gu_threads.h"
 #include "gu_throw.hpp"
+#include "gu_logger.hpp"
 
 #include <cerrno>
 #include <cstring>
+#include <cassert>
+#include <cstdlib> // abort()
+
+#if !defined(GU_DEBUG_MUTEX) && !defined(NDEBUG)
+#define GU_MUTEX_DEBUG
+#endif
 
 namespace gu
 {
@@ -19,34 +26,78 @@ namespace gu
     {
     public:
 
-        Mutex () : value()
+        Mutex () : value_()
+#ifdef GU_MUTEX_DEBUG
+                 , owned_()
+                 , locked_()
+#endif /* GU_MUTEX_DEBUG */
         {
-            gu_mutex_init (&value, NULL); // always succeeds
+            gu_mutex_init (&value_, NULL); // always succeeds
         }
 
         ~Mutex ()
         {
-            int err = gu_mutex_destroy (&value);
+            int const err(gu_mutex_destroy (&value_));
             if (gu_unlikely(err != 0))
             {
-                gu_throw_error (err) << "gu_mutex_destroy()";
+                assert(0);
+                gu_throw_error(err) << "gu_mutex_destroy()";
             }
         }
 
-        int lock()   const { return gu_mutex_lock(&value); }
+        void lock() const
+        {
+            int const err(gu_mutex_lock(&value_));
+            if (gu_likely(0 == err))
+            {
+#ifdef GU_MUTEX_DEBUG
+                locked_ = true;
+                owned_  = gu_thread_self();
+#endif /* GU_MUTEX_DEBUG */
+            }
+            else
+            {
+                assert(0);
+                gu_throw_error(err) << "Mutex lock failed";
+            }
+        }
 
-        int unlock() const { return gu_mutex_unlock(&value); }
-
-        gu_mutex_t& impl() const { return value; }
-
-#ifdef GU_DEBUG_MUTEX
-        bool locked() const { return gu_mutex_locked(&value); }
-        bool owned()  const { return gu_mutex_owned(&value);  }
+        void unlock() const
+        {
+            // this is not atomic, but the presumption is that unlock()
+            // should never be called before preceding lock() completes
+#if defined(GU_DEBUG_MUTEX) || defined(GU_MUTEX_DEBUG)
+            assert(locked());
+            assert(owned());
+#if defined(GU_MUTEX_DEBUG)
+            locked_ = false;
+#endif /* GU_MUTEX_DEBUG */
 #endif /* GU_DEBUG_MUTEX */
+            int const err(gu_mutex_unlock(&value_));
+            if (gu_unlikely(0 != err))
+            {
+                log_fatal << "Mutex unlock failed: " << err << " ("
+                          << strerror(err) << "), Aborting.";
+                ::abort();
+            }
+        }
 
+        gu_mutex_t& impl() const { return value_; }
+
+#if defined(GU_DEBUG_MUTEX)
+        bool locked() const { return gu_mutex_locked(&value_); }
+        bool owned()  const { return locked() && gu_mutex_owned(&value_);  }
+#elif defined(GU_MUTEX_DEBUG)
+        bool locked() const { return locked_; }
+        bool owned()  const { return locked() && gu_thread_equal(owned_,gu_thread_self()); }
+#endif /* GU_DEBUG_MUTEX */
     protected:
 
-        gu_mutex_t mutable value;
+        gu_mutex_t  mutable value_;
+#ifdef GU_MUTEX_DEBUG
+        gu_thread_t mutable owned_;
+        bool        mutable locked_;
+#endif /* GU_MUTEX_DEBUG */
 
     private:
 
@@ -89,8 +140,6 @@ namespace gu
 
         pthread_mutex_t mutex_;
     };
-
-
 }
 
 #endif /* __GU_MUTEX__ */

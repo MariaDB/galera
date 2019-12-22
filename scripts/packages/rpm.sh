@@ -38,15 +38,28 @@ else
     DISTRO_VERSION=
 fi
 
+# Perhaps not needed for fc20? As it causes package name to be
+# galera...fc20.fc20..rpm
+# See %_rpmfilename (http://rpm.org/api/4.4.2.2/config_macros.html)
 [ -n "$DISTRO_VERSION" ] && RELEASE=$RELEASE.$DISTRO_VERSION
+
+# %dist does not return a value for centos5
+# https://bugs.centos.org/view.php?id=3239
+if [ ${DISTRO_VERSION} = "rhel5" ]
+then
+  DIST_TAG="dist .el5"
+else
+  DIST_TAG="_foo bar"
+fi
 
 $(which rpmbuild) --clean --define "_topdir $RPM_TOP_DIR" \
                   --define "optflags $RPM_OPT_FLAGS" \
                   --define "version $1" \
                   --define "release $RELEASE" \
-                  -bb --short-circuit -bi $GALERA_SPEC
+                  --define "$DIST_TAG" \
+                  -bb $GALERA_SPEC
 
-RPM_ARCH=$(uname -m | sed s/i686/i386/)
+RPM_ARCH=$(rpm --showrc | grep "^build arch" | awk '{print $4}')
 
 mv $RPM_TOP_DIR/RPMS/$RPM_ARCH/galera-*.rpm ./
 

@@ -72,7 +72,9 @@ Commandline Options:
     revno=XXXX          source code revision number
     bpostatic=path      a path to static libboost_program_options.a
     extra_sysroot=path  a path to extra development environment (Fink, Homebrew, MacPorts, MinGW)
+    version=X.X.X       galera version
     bits=[32bit|64bit]
+    gcov=[True|False]   compile Galera for code coverage reporting
 ''')
 # bpostatic option added on Percona request
 
@@ -113,6 +115,8 @@ build_dir = ARGUMENTS.get('build_dir', '')
 debug = ARGUMENTS.get('debug', -1)
 dbug  = ARGUMENTS.get('dbug', False)
 
+gcov = ARGUMENTS.get('gcov', False)
+
 debug_lvl = int(debug)
 if debug_lvl >= 0 and debug_lvl < 3:
     opt_flags = ' -g -O%d -fno-inline' % debug_lvl
@@ -122,6 +126,9 @@ elif debug_lvl == 3:
 
 if dbug:
     opt_flags = opt_flags + ' -DGU_DBUG_ON'
+
+if gcov:
+    opt_flags = opt_flags + ' --coverage -g'
 
 if sysname == 'sunos':
     compile_arch = ' -mtune=native'
@@ -134,10 +141,17 @@ elif x86:
             if sysname == 'linux':
                 link_arch = ' -Wl,-melf_i386'
     else:
-        compile_arch = ' -m64'
-        if sysname == 'linux':
+        if machine == 'ppc64':
+          compile_arch = ' -mtune=native'
+          link_arch = ' -Wl,-melf64ppc'
+        elif machine == 'ppc64le':
+          compile_arch = ' -mtune=native'
+          link_arch = ' -Wl,-melf64lppc'
+        else:
+          compile_arch = ' -m64'
+          if sysname == 'linux':
             link_arch = ' -Wl,-melf_x86_64'
-    link_arch = compile_arch + link_arch
+        link_arch = compile_arch + link_arch
 elif machine == 's390x':
     compile_arch = ' -mzarch'
     if bits == 32:
@@ -151,13 +165,16 @@ deterministic_tests = int(ARGUMENTS.get('deterministic_tests', 0))
 strict_build_flags = int(ARGUMENTS.get('strict_build_flags', 0))
 
 
-GALERA_VER = ARGUMENTS.get('version', '3.28')
+GALERA_VER = ARGUMENTS.get('version', '4.3')
 GALERA_REV = ARGUMENTS.get('revno', 'XXXX')
 
 # Attempt to read from file if not given
 if GALERA_REV == "XXXX" and os.path.isfile("GALERA_REVISION"):
-    with open("GALERA_REVISION", "r") as f:
+    f = open("GALERA_REVISION", "r")
+    try:
         GALERA_REV = f.readline().rstrip("\n")
+    finally:
+        f.close()
 
 # export to any module that might have use of those
 Export('GALERA_VER', 'GALERA_REV')
@@ -219,7 +236,7 @@ if sysname == 'freebsd' or sysname == 'sunos':
     env.Append(LIBPATH = ['/usr/local/lib'])
     env.Append(CPPPATH = ['/usr/local/include'])
 if sysname == 'sunos':
-   env.Replace(SHLINKFLAGS = '-shared ')
+    env.Replace(SHLINKFLAGS = '-shared ')
 
 # Add paths is extra_sysroot argument was specified
 extra_sysroot = ARGUMENTS.get('extra_sysroot', '')
@@ -254,7 +271,7 @@ env.Prepend(CFLAGS = '-std=c99 -fno-strict-aliasing -pipe ')
 # CXX-specific flags
 # Note: not all 3rd-party libs like '-Wold-style-cast -Weffc++'
 #       adding those after checks
-env.Prepend(CXXFLAGS = '-Wno-long-long -Wno-deprecated -ansi ')
+env.Prepend(CXXFLAGS = '-Wno-long-long -Wno-deprecated ')
 if sysname != 'sunos':
     env.Prepend(CXXFLAGS = '-pipe ')
 
@@ -265,6 +282,9 @@ if sysname != 'sunos':
 #
 #env.Prepend(LINKFLAGS = '-Wl,--warn-common -Wl,--fatal-warnings ')
 
+if gcov:
+   env.Append(LINKFLAGS = '--coverage -g')
+
 #
 # Check required headers and libraries (autoconf functionality)
 #
@@ -273,15 +293,27 @@ if sysname != 'sunos':
 # Custom tests:
 #
 
-def CheckCpp11(context):
+def CheckCpp0x(context):
     test_source = """
-#if __cplusplus < 201103
-#error Not compiling in C++11 mode
-#endif
 int main() { return 0; }
 """
-    context.Message('Checking if compiling in C++11 mode ... ')
+    context.Message('Checking if compiler accepts -std=c++0x ... ')
+    cxxflags_orig = context.env['CXXFLAGS']
+    context.env.Prepend(CXXFLAGS = '-std=c++0x ')
     result = context.TryLink(test_source, '.cpp')
+    context.env.Replace(CXXFLAGS = cxxflags_orig)
+    context.Result(result)
+    return result
+
+def CheckCpp11(context):
+    test_source = """
+int main() { return 0; }
+"""
+    context.Message('Checking if compiler accepts -std=c++11 ... ')
+    cxxflags_orig = context.env['CXXFLAGS']
+    context.env.Prepend(CXXFLAGS = '-std=c++11 ')
+    result = context.TryLink(test_source, '.cpp')
+    context.env.Replace(CXXFLAGS = cxxflags_orig)
     context.Result(result)
     return result
 
@@ -319,12 +351,12 @@ int main() { std::tr1::array<int, 5> a; return 0; }
     context.Result(result)
     return result
 
-def CheckTr1SharedPtr(context):
+def CheckStdSharedPtr(context):
     test_source = """
-#include <tr1/memory>
-int main() { int n; std::tr1::shared_ptr<int> p(&n); return 0; }
+#include <memory>
+int main() { int n; std::shared_ptr<int> p(&n); return 0; }
 """
-    context.Message('Checking for std::tr1::shared_ptr ... ')
+    context.Message('Checking for std::shared_ptr ... ')
     result = context.TryLink(test_source, '.cpp')
     context.Result(result)
     return result
@@ -389,10 +421,11 @@ int main() { return 0; }
 # Construct configuration context
 #
 conf = Configure(env, custom_tests = {
+    'CheckCpp0x': CheckCpp0x,
     'CheckCpp11': CheckCpp11,
     'CheckSystemASIOVersion': CheckSystemASIOVersion,
     'CheckTr1Array': CheckTr1Array,
-    'CheckTr1SharedPtr': CheckTr1SharedPtr,
+    'CheckStdSharedPtr': CheckStdSharedPtr,
     'CheckTr1UnorderedMap': CheckTr1UnorderedMap,
     'CheckWeffcpp': CheckWeffcpp,
     'CheckSetEcdhAuto': CheckSetEcdhAuto,
@@ -454,7 +487,18 @@ if conf.CheckHeader('execinfo.h'):
 
 # Additional C headers and libraries
 
-cpp11 = conf.CheckCpp11()
+# Check if compiler has support for C++11
+if conf.CheckCpp11():
+    conf.env.Prepend(CXXFLAGS = '-std=c++11 ')
+elif conf.CheckCpp0x():
+    conf.env.Prepend(CXXFLAGS = '-std=c++0x ')
+else:
+    print('Compiler does not accept neither -std=c++0x nor -std=c++11')
+    Exit(1)
+
+# This flag should be eventually removed once the code below
+# has been reorganized.
+cpp11 = True
 
 # array
 if cpp11:
@@ -468,14 +512,18 @@ else:
     Exit(1)
 
 # shared_ptr
-if cpp11:
-    conf.env.Append(CPPFLAGS = ' -DHAVE_STD_SHARED_PTR')
-elif False and conf.CheckTr1SharedPtr():
-    # std::tr1::shared_ptr<> is not derived from std::auto_ptr<>
-    # this upsets boost in asio, so don't use tr1 version, use boost instead
-    conf.env.Append(CPPFLAGS = ' -DHAVE_TR1_SHARED_PTR')
-elif conf.CheckCXXHeader('boost/shared_ptr.hpp'):
+#
+# Boost shared_ptr works currently the best across all platforms.
+# Using std::shared_ptr with asio causes compilation errors with
+# older GCC compilers or boost library versions, therefore we prefer
+# boost implementation.
+#
+# Eventually std::shared_ptr should take precedence once all compilation
+# issues have been resolved.
+if conf.CheckCXXHeader('boost/shared_ptr.hpp'):
     conf.env.Append(CPPFLAGS = ' -DHAVE_BOOST_SHARED_PTR_HPP')
+elif conf.CheckStdSharedPtr():
+    conf.env.Append(CPPFLAGS = ' -DHAVE_STD_SHARED_PTR')
 else:
     print('no suitable shared_ptr header found')
     Exit(1)
@@ -506,11 +554,7 @@ if boost == 1:
     conf.env.Append(CPPFLAGS = ' -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG=1')
 
     # Common procedure to find boost static library
-    if bits == 64:
-        boost_libpaths = [ boost_library_path, '/usr/lib64', '/usr/local/lib64' ]
-    else:
-        boost_libpaths = [ boost_library_path, '/usr/local/lib', '/usr/lib' ]
-
+    boost_libpaths = [ boost_library_path, '/usr/local/lib', '/usr/local/lib64', '/usr/lib', '/usr/lib64' ]
     def check_boost_library(libBaseName, header, configuredLibPath, autoadd = 1):
         libName = libBaseName + boost_library_suffix
         if configuredLibPath != '' and not os.path.isfile(configuredLibPath):
@@ -607,6 +651,7 @@ if strict_build_flags == 1:
         conf.env.Append(CCFLAGS  = ' -Wno-self-assign')
         conf.env.Append(CCFLAGS  = ' -Wno-gnu-zero-variadic-macro-arguments')
         conf.env.Append(CXXFLAGS = ' -Wno-variadic-macros')
+        conf.env.Append(CXXFLAGS = ' -Wnon-virtual-dtor')
         # CXX may be something like "ccache clang++"
         if 'ccache' in conf.env['CXX'] or 'ccache' in conf.env['CC']:
             conf.env.Append(CCFLAGS = ' -Qunused-arguments')
@@ -614,7 +659,11 @@ if strict_build_flags == 1:
 if conf.CheckWeffcpp():
     conf.env.Prepend(CXXFLAGS = '-Weffc++ ')
 
+# We assume that if it is not Clang, then it is GCC
 if not 'clang' in cxx_version:
+    gcc_version_num = read_first_line(conf.env['CXX'].split() + ['-dumpversion'])
+    if str(gcc_version_num) < "4.9.0":
+        conf.env.Prepend(CXXFLAGS = '-Wnon-virtual-dtor ')
     conf.env.Prepend(CXXFLAGS = '-Wold-style-cast ')
 
 env = conf.Finish()
@@ -623,7 +672,7 @@ print('Global flags:')
 for f in ['CFLAGS', 'CXXFLAGS', 'CCFLAGS', 'CPPFLAGS']:
     print(f + ': ' + env[f].strip())
 
-Export('x86', 'bits', 'env', 'sysname', 'libboost_program_options')
+Export('x86', 'bits', 'env', 'sysname', 'machine', 'libboost_program_options')
 
 #
 # Actions to build .dSYM directories, containing debugging information for Darwin

@@ -7,10 +7,13 @@
 #define _gu_uuid_hpp_
 
 #include "gu_uuid.h"
-#include "gu_arch.h" // GU_ASSERT_ALIGNMENT
+#include "gu_arch.h"        // GU_ASSERT_ALIGNMENT
 #include "gu_assert.hpp"
+#include "gu_macros.hpp"
 #include "gu_buffer.hpp"
 #include "gu_exception.hpp"
+#include "gu_serialize.hpp" // check_range()
+#include "gu_utils.hpp"     // ptr_offset()
 
 #include <istream>
 #include <cstring>
@@ -59,138 +62,158 @@ inline std::istream& operator>>(std::istream& is, gu_uuid_t& uuid)
     return is;
 }
 
-GU_FORCE_INLINE size_t gu_uuid_serial_size(const gu_uuid_t& uuid)
-{
-    return sizeof(uuid.data);
-}
-
 namespace gu {
-    class UUIDSerializeException : public Exception
-    {
-    public:
-        UUIDSerializeException(size_t need, size_t have);
-    };
-}
-
-inline size_t gu_uuid_serialize(const gu_uuid_t& uuid, gu::byte_t* buf,
-                                size_t const buflen, size_t const offset)
-{
-    size_t const len(gu_uuid_serial_size(uuid));
-    size_t const end_offset(offset + len);
-
-    if (gu_unlikely(end_offset > buflen))
-        throw gu::UUIDSerializeException(len, buflen - offset);
-
-    ::memcpy(buf + offset, uuid.data, len);
-    return end_offset;
-}
-
-inline size_t gu_uuid_unserialize(const gu::byte_t* buf, size_t const buflen,
-                                  size_t const offset, gu_uuid_t& uuid)
-{
-    size_t const len(gu_uuid_serial_size(uuid));
-    size_t const end_offset(offset + len);
-
-    if (gu_unlikely(end_offset > buflen))
-        throw gu::UUIDSerializeException(len, buflen - offset);
-
-    ::memcpy(uuid.data, buf + offset, len);
-    return end_offset;
-}
-
-namespace gu {
+    class UUID_base;
     class UUID;
 }
 
-class gu::UUID
+/* This class should not be used directly. It is here to allow
+ * gu::UUID and gcomm::UUID to inherit from it without the virtual table
+(* overhead. */
+class gu::UUID_base
 {
 public:
 
-    UUID() : uuid_(GU_UUID_NIL) {}
+    UUID_base() : uuid_(GU_UUID_NIL) {}
 
-    UUID(const void* node, const size_t node_len) : uuid_()
+    UUID_base(const void* const node, const size_t node_len) : uuid_()
     {
         gu_uuid_generate(&uuid_, node, node_len);
     }
 
-    UUID(gu_uuid_t uuid) : uuid_(uuid) {}
+    UUID_base(gu_uuid_t uuid) : uuid_(uuid) {}
 
-    size_t unserialize(const gu::byte_t* buf,
-                       const size_t buflen, const size_t offset)
+    class SerializeException : public Exception
     {
-        return gu_uuid_unserialize(buf, buflen, offset, uuid_);
-    }
-
-    size_t serialize(gu::byte_t* buf,
-                     const size_t buflen, const size_t offset) const
-    {
-        return gu_uuid_serialize(uuid_, buf, buflen, offset);
-    }
+    public:
+        SerializeException(size_t need, size_t have);
+    };
 
     static size_t serial_size()
     {
-        return sizeof(gu_uuid_t);
+        return sizeof(UUID_base().uuid_);
     }
 
-    const gu_uuid_t* uuid_ptr() const
+    size_t unserialize(const void* const buf, const size_t offset)
+    {
+        size_t const len(serial_size());
+        ::memcpy(&uuid_, ptr_offset(buf, offset), len);
+        return offset + len;
+    }
+
+    size_t serialize  (void* const buf, const size_t offset) const
+    {
+        size_t const len(serial_size());
+        ::memcpy(ptr_offset(buf, offset), &uuid_, len);
+        return offset + len;
+    }
+
+    size_t unserialize(const void* const buf, const size_t buflen,
+                       const size_t offset)
+    {
+        gu_trace(gu::check_bounds(offset + serial_size(), buflen));
+        return unserialize(buf, offset);
+    }
+
+    size_t serialize  (void* const buf, const size_t buflen,
+                       const size_t offset) const
+    {
+        gu_trace(gu::check_bounds(offset + serial_size(), buflen));
+        return serialize(buf, offset);
+    }
+
+    const gu_uuid_t* ptr() const
     {
         return &uuid_;
     }
 
     GU_FORCE_INLINE
-    UUID& operator=(const UUID& u)
+    UUID_base& operator=(const UUID_base& u)
     {
         gu_uuid_copy(&uuid_, &u.uuid_);
         return *this;
     }
 
-    bool operator<(const UUID& cmp) const
+    bool operator<(const UUID_base& cmp) const
     {
         return (gu_uuid_compare(&uuid_, &cmp.uuid_) < 0);
     }
 
-    bool operator==(const UUID& cmp) const
+    bool operator==(const gu_uuid_t& cmp) const
     {
-        return (gu_uuid_compare(&uuid_, &cmp.uuid_) == 0);
+        return (gu_uuid_compare(&uuid_, &cmp) == 0);
     }
 
-    bool operator!=(const UUID& cmp) const
+    bool operator!=(const gu_uuid_t& cmp) const
     {
         return !(*this == cmp);
     }
 
-    bool older(const UUID& cmp) const
+    bool operator==(const UUID_base& cmp) const
+    {
+        return (gu_uuid_compare(&uuid_, &cmp.uuid_) == 0);
+    }
+
+    bool operator!=(const UUID_base& cmp) const
+    {
+        return !(*this == cmp);
+    }
+
+    bool older(const UUID_base& cmp) const
     {
         return (gu_uuid_older(&uuid_, &cmp.uuid_) > 0);
     }
 
-    void write_stream(std::ostream& os) const
+    std::ostream& print(std::ostream& os) const
     {
-        os << uuid_;
+        return (os << uuid_);
     }
 
-    void read_stream(std::istream& is)
+    std::istream& scan(std::istream& is)
     {
-        is >> uuid_;
+        return (is >> uuid_);
+    }
+
+    const gu_uuid_t& operator()() const
+    {
+        return uuid_;
     }
 
 protected:
-    gu_uuid_t         uuid_;
-}; // class UUID
+
+    ~UUID_base() {}
+
+    gu_uuid_t uuid_;
+
+private:
+
+    GU_COMPILE_ASSERT(sizeof(gu_uuid_t) == GU_UUID_LEN, UUID_size);
+
+}; /* class UUID_base */
+
+class gu::UUID : public UUID_base
+{
+public:
+
+    UUID() : UUID_base() {}
+
+    UUID(const void* node, const size_t node_len) : UUID_base(node, node_len)
+    {}
+
+    UUID(gu_uuid_t uuid) : UUID_base(uuid) {}
+}; /* class UUID */
 
 namespace gu
 {
-inline std::ostream& operator<<(std::ostream& os, const gu::UUID& uuid)
+inline std::ostream& operator<< (std::ostream& os, const gu::UUID_base& uuid)
 {
-    uuid.write_stream(os);
-    return os;
+    uuid.print(os); return os;
 }
 
-inline std::istream& operator>>(std::istream& is, gu::UUID& uuid)
+inline std::istream& operator>> (std::istream& is, gu::UUID_base& uuid)
 {
-    uuid.read_stream(is);
-    return is;
+    uuid.scan(is); return is;
 }
-} // namespace gu
+} /* namespace gu */
 
 #endif // _gu_uuid_hpp_

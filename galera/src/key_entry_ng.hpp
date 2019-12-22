@@ -9,8 +9,6 @@
 
 namespace galera
 {
-    class TrxHandle;
-
     class KeyEntryNG
     {
     public:
@@ -19,7 +17,7 @@ namespace galera
         {
             std::fill(&refs_[0],
                       &refs_[KeySet::Key::TYPE_MAX],
-                      static_cast<TrxHandle*>(NULL));
+                      static_cast<TrxHandleSlave*>(NULL));
         }
 
         KeyEntryNG(const KeyEntryNG& other)
@@ -33,7 +31,7 @@ namespace galera
         const KeySet::KeyPart& key() const { return key_; }
 
         void ref(wsrep_key_type_t p, const KeySet::KeyPart& k,
-                 TrxHandle* trx)
+                 TrxHandleSlave* trx)
         {
             assert(0 == refs_[p] ||
                    refs_[p]->global_seqno() <= trx->global_seqno());
@@ -42,7 +40,7 @@ namespace galera
             key_ = k;
         }
 
-        void unref(wsrep_key_type_t p, TrxHandle* trx)
+        void unref(wsrep_key_type_t p, TrxHandleSlave* trx)
         {
             assert(refs_[p] != NULL);
 
@@ -69,7 +67,7 @@ namespace galera
             return ret;
         }
 
-        const TrxHandle* ref_trx(int const p) const
+        const TrxHandleSlave* ref_trx(wsrep_key_type_t const p) const
         {
             return refs_[p];
         }
@@ -99,12 +97,12 @@ namespace galera
 
     private:
 
-        TrxHandle*      refs_[KeySet::Key::TYPE_MAX + 1];
+        TrxHandleSlave* refs_[KeySet::Key::TYPE_MAX + 1];
         KeySet::KeyPart key_;
 
 #ifndef NDEBUG
-        void assert_ref(KeySet::Key::Prefix, TrxHandle*) const;
-        void assert_unref(KeySet::Key::Prefix, TrxHandle*) const;
+        void assert_ref(KeySet::Key::Prefix, TrxHandleSlave*) const;
+        void assert_unref(KeySet::Key::Prefix, TrxHandleSlave*) const;
 #endif /* NDEBUG */
     };
 

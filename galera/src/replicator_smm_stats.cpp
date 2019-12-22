@@ -1,27 +1,9 @@
 /* Copyright (C) 2010-2017 Codership Oy <info@codersip.com> */
 
 #include "replicator_smm.hpp"
-#include "uuid.hpp"
+
 #include <gu_debug_sync.hpp>
 #include <gu_mem.h>
-
-// @todo: should be protected static member of the parent class
-static const size_t GALERA_STAGE_MAX(11);
-// @todo: should be protected static member of the parent class
-static const char* state_str[GALERA_STAGE_MAX] =
-{
-    "Initialized",
-    "Joining",
-    "Joining: preparing for State Transfer",
-    "Joining: requested State Transfer",
-    "Joining: receiving State Transfer",
-    "Joined",
-    "Synced",
-    "Donor/Desynced",
-    "Joining: State Transfer request failed",
-    "Joining: State Transfer failed",
-    "Destroyed"
-};
 
 // @todo: should be protected static member of the parent class
 static wsrep_member_status_t state2stats(galera::ReplicatorSMM::State state)
@@ -30,7 +12,6 @@ static wsrep_member_status_t state2stats(galera::ReplicatorSMM::State state)
     {
     case galera::ReplicatorSMM::S_DESTROYED :
     case galera::ReplicatorSMM::S_CLOSED    :
-    case galera::ReplicatorSMM::S_CLOSING   :
     case galera::ReplicatorSMM::S_CONNECTED : return WSREP_MEMBER_UNDEFINED;
     case galera::ReplicatorSMM::S_JOINING   : return WSREP_MEMBER_JOINER;
     case galera::ReplicatorSMM::S_JOINED    : return WSREP_MEMBER_JOINED;
@@ -38,7 +19,9 @@ static wsrep_member_status_t state2stats(galera::ReplicatorSMM::State state)
     case galera::ReplicatorSMM::S_DONOR     : return WSREP_MEMBER_DONOR;
     }
 
-    gu_throw_fatal << "invalid state " << state;
+    log_fatal << "Unknown state code: " << state;
+    assert(0);
+    return WSREP_MEMBER_ERROR;
 }
 
 // @todo: should be protected static member of the parent class
@@ -49,27 +32,36 @@ static const char* state2stats_str(galera::ReplicatorSMM::State    state,
 
     switch (state)
     {
-    case galera::ReplicatorSMM::S_DESTROYED :
-        return state_str[10];
-    case galera::ReplicatorSMM::S_CLOSED :
-    case galera::ReplicatorSMM::S_CLOSING:
+    case galera::ReplicatorSMM::S_DESTROYED:
+        return "Destroyed";
+    case galera::ReplicatorSMM::S_CLOSED:
     case galera::ReplicatorSMM::S_CONNECTED:
     {
-        if (sst_state == ReplicatorSMM::SST_REQ_FAILED)  return state_str[8];
-        else if (sst_state == ReplicatorSMM::SST_FAILED) return state_str[9];
-        else                                             return state_str[0];
+        if (sst_state == ReplicatorSMM::SST_REQ_FAILED)
+            return "Joining: State Transfer request failed";
+        else if (sst_state == ReplicatorSMM::SST_FAILED)
+            return "Joining: State Transfer failed";
+        else
+            return "Initialized";
     }
     case galera::ReplicatorSMM::S_JOINING:
     {
-        if (sst_state == ReplicatorSMM::SST_WAIT) return state_str[4];
-        else                                      return state_str[1];
+        if (sst_state == ReplicatorSMM::SST_WAIT)
+            return "Joining: receiving State Transfer";
+        else
+            return "Joining";
     }
-    case galera::ReplicatorSMM::S_JOINED : return state_str[5];
-    case galera::ReplicatorSMM::S_SYNCED : return state_str[6];
-    case galera::ReplicatorSMM::S_DONOR  : return state_str[7];
+    case galera::ReplicatorSMM::S_JOINED:
+        return "Joined";
+    case galera::ReplicatorSMM::S_SYNCED:
+        return "Synced";
+    case galera::ReplicatorSMM::S_DONOR:
+        return "Donor/Desynced";
     }
 
-    gu_throw_fatal << "invalid state " << state;
+    log_fatal << "Unknown state: " << state;
+    assert(0);
+    return "Unknown state code: ";
 }
 
 typedef enum status_vars
@@ -191,15 +183,17 @@ galera::ReplicatorSMM::stats_get() const
     std::vector<struct wsrep_stats_var> sv(wsrep_stats_);
 
     sv[STATS_PROTOCOL_VERSION   ].value._int64  = protocol_version_;
-    sv[STATS_LAST_COMMITTED     ].value._int64  = commit_monitor_.last_left();
+    wsrep_gtid last_committed;
+    (void)last_committed_id(&last_committed);
+    sv[STATS_LAST_COMMITTED     ].value._int64  = last_committed.seqno;
     sv[STATS_REPLICATED         ].value._int64  = replicated_();
     sv[STATS_REPLICATED_BYTES   ].value._int64  = replicated_bytes_();
     sv[STATS_KEYS_COUNT         ].value._int64  = keys_count_();
     sv[STATS_KEYS_BYTES         ].value._int64  = keys_bytes_();
     sv[STATS_DATA_BYTES         ].value._int64  = data_bytes_();
     sv[STATS_UNRD_BYTES         ].value._int64  = unrd_bytes_();
-    sv[STATS_RECEIVED           ].value._int64  = gcs_as_.received();
-    sv[STATS_RECEIVED_BYTES     ].value._int64  = gcs_as_.received_bytes();
+    sv[STATS_RECEIVED           ].value._int64  = as_->received();
+    sv[STATS_RECEIVED_BYTES     ].value._int64  = as_->received_bytes();
     sv[STATS_LOCAL_COMMITS      ].value._int64  = local_commits_();
     sv[STATS_LOCAL_CERT_FAILURES].value._int64  = local_cert_failures_();
     sv[STATS_LOCAL_REPLAYS      ].value._int64  = local_replays_();
@@ -222,7 +216,6 @@ galera::ReplicatorSMM::stats_get() const
 //    sv[STATS_FC_CSENT            ].value._int64  = stats.fc_csent;
     sv[STATS_FC_RECEIVED         ].value._int64  = stats.fc_received;
 
-
     double avg_cert_interval(0);
     double avg_deps_dist(0);
     size_t index_size(0);
@@ -235,25 +228,30 @@ galera::ReplicatorSMM::stats_get() const
     double oooe;
     double oool;
     double win;
-    const_cast<Monitor<ApplyOrder>&>(apply_monitor_).
-        get_stats(&oooe, &oool, &win);
+    apply_monitor_.get_stats(&oooe, &oool, &win);
 
     sv[STATS_APPLY_OOOE          ].value._double = oooe;
     sv[STATS_APPLY_OOOL          ].value._double = oool;
     sv[STATS_APPLY_WINDOW        ].value._double = win;
 
-    const_cast<Monitor<CommitOrder>&>(commit_monitor_).
-        get_stats(&oooe, &oool, &win);
+    commit_monitor_.get_stats(&oooe, &oool, &win);
 
     sv[STATS_COMMIT_OOOE         ].value._double = oooe;
     sv[STATS_COMMIT_OOOL         ].value._double = oool;
     sv[STATS_COMMIT_WINDOW       ].value._double = win;
 
-
-    sv[STATS_LOCAL_STATE         ].value._int64  = state2stats(state_());
-    sv[STATS_LOCAL_STATE_COMMENT ].value._string = state2stats_str(state_(),
-                                                                   sst_state_);
-    sv[STATS_CAUSAL_READS].value._int64    = causal_reads_();
+    if (st_.corrupt())
+    {
+        sv[STATS_LOCAL_STATE        ].value._int64  = WSREP_MEMBER_ERROR;
+        sv[STATS_LOCAL_STATE_COMMENT].value._string = "Inconsistent";
+    }
+    else
+    {
+        sv[STATS_LOCAL_STATE        ].value._int64  =state2stats(state_());
+        sv[STATS_LOCAL_STATE_COMMENT].value._string =state2stats_str(state_(),
+                                                                     sst_state_);
+    }
+    sv[STATS_CAUSAL_READS        ].value._int64    = causal_reads_();
 
     Wsdb::stats wsdb_stats(wsdb_.get_stats());
     sv[STATS_OPEN_TRX].value._int64 = wsdb_stats.n_trx_;
@@ -325,8 +323,12 @@ galera::ReplicatorSMM::stats_get() const
         sv[sv_pos].type = WSREP_VAR_STRING;
         sv[sv_pos].value._string = 0;
 
-        assert(static_cast<size_t>(tail_buf - reinterpret_cast<const char*>(buf)) == vec_size + tail_size);
-        assert(reinterpret_cast<const char*>(buf)[vec_size + tail_size - 1] == '\0');
+        assert(static_cast<size_t>
+               (tail_buf - reinterpret_cast<const char*>(buf)) ==
+               vec_size + tail_size);
+        assert(reinterpret_cast<const char*>(buf)[vec_size + tail_size - 1] ==
+               '\0');
+
         // Finally copy sv vector to buf
         memcpy(buf, &sv[0], vec_size);
     }
