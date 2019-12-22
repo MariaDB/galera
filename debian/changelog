@@ -1,8 +1,10 @@
-galera-4 (26.4.0-1) unstable; urgency=medium
+galera-4 (26.4.3-1) unstable; urgency=medium
 
-  * Update d/watch for Galera 4.x series and open new changelog entry
+  * New upstream version 26.4.3
+  * Refresh patches after 26.4.3 import
+  * Rename galera-3 -> galera-4 after Galera 4 import
 
- -- Otto Kekäläinen <otto@debian.org>  Sun, 22 Dec 2019 11:42:16 +0200
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 22 Dec 2019 12:06:07 +0200
 
 galera-3 (25.3.28-2) unstable; urgency=low
 
