@@ -1,9 +1,12 @@
-// Copyright (C) 2009-2017 Codership Oy <info@codership.com>
+// Copyright (C) 2009-2018 Codership Oy <info@codership.com>
 
 #include "galera_info.hpp"
-#include <galerautils.h>
+
 #include <gu_uuid.hpp>
+#include <gu_throw.hpp>
+
 #include <string.h>
+#include <vector>
 
 static size_t
 view_info_size (int members)
@@ -12,65 +15,61 @@ view_info_size (int members)
 }
 
 /* create view info out of configuration message */
-wsrep_view_info_t* galera_view_info_create (const gcs_act_conf_t* conf,
-                                            bool                  st_required)
+wsrep_view_info_t* galera_view_info_create (const gcs_act_cchange& conf,
+                                            wsrep_cap_t const      capabilities,
+                                            int const              my_idx,
+                                            wsrep_uuid_t&          my_uuid)
 {
     wsrep_view_info_t* ret = static_cast<wsrep_view_info_t*>(
-        malloc(view_info_size(conf ? conf->memb_num : 0)));
+        ::malloc(view_info_size(conf.memb.size())));
 
-    if (ret) {
-        if (conf)
+    if (ret)
+    {
+        wsrep_seqno_t const seqno
+            (conf.seqno != GCS_SEQNO_ILL ? conf.seqno : WSREP_SEQNO_UNDEFINED);
+        wsrep_gtid_t const gtid = { conf.uuid, seqno };
+
+        ret->state_id  = gtid;
+        ret->view      = conf.conf_id;
+        ret->status    = conf.conf_id != -1 ?
+            WSREP_VIEW_PRIMARY : WSREP_VIEW_NON_PRIMARY;
+        ret->capabilities = capabilities;
+        ret->my_idx    = -1;
+        ret->memb_num  = conf.memb.size();
+        ret->proto_ver = conf.appl_proto_ver;
+
+        for (int m = 0; m < ret->memb_num; ++m)
         {
-            const char* str = conf->data;
-            int m;
+            const gcs_act_cchange::member& cm(conf.memb[m]);    // from
+            wsrep_member_info_t&           wm(ret->members[m]); // to
 
-            wsrep_uuid_t  uuid;
-            memcpy(uuid.data, conf->uuid, sizeof(uuid.data));
-            wsrep_seqno_t seqno = conf->seqno != GCS_SEQNO_ILL ?
-                conf->seqno : WSREP_SEQNO_UNDEFINED;
-            wsrep_gtid_t  gtid  = { uuid, seqno };
+            wm.id = cm.uuid_;
 
-            ret->state_id  = gtid;
-            ret->view      = conf->conf_id;
-            ret->status    = conf->conf_id != -1 ?
-                WSREP_VIEW_PRIMARY : WSREP_VIEW_NON_PRIMARY;
-            ret->state_gap = st_required;
-            ret->my_idx    = conf->my_idx;
-            ret->memb_num  = conf->memb_num;
-            ret->proto_ver = conf->appl_proto_ver;
-
-            for (m = 0; m < ret->memb_num; m++) {
-                wsrep_member_info_t* member = &ret->members[m];
-
-                size_t id_len = strlen(str);
-                gu_uuid_t memb_id;
-                gu_uuid_from_string(str, memb_id);
-                memcpy(&member->id, &memb_id, sizeof(memb_id));
-                str = str + id_len + 1;
-
-                strncpy(member->name, str, sizeof(member->name) - 1);
-                member->name[sizeof(member->name) - 1] = '\0';
-                str = str + strlen(str) + 1;
-
-                strncpy(member->incoming, str, sizeof(member->incoming) - 1);
-                member->incoming[sizeof(member->incoming) - 1] = '\0';
-                str = str + strlen(str) + 1;
-
-                str += sizeof(gcs_seqno_t); // skip cached seqno.
+            if (wm.id == my_uuid)
+            {
+                ret->my_idx = m;
             }
+
+            strncpy(wm.name, cm.name_.c_str(), sizeof(wm.name) - 1);
+            wm.name[sizeof(wm.name) - 1] = '\0';
+
+            strncpy(wm.incoming, cm.incoming_.c_str(), sizeof(wm.incoming) - 1);
+            wm.incoming[sizeof(wm.incoming) - 1] = '\0';
+
         }
-        else
+
+        if (WSREP_UUID_UNDEFINED == my_uuid && my_idx >= 0)
         {
-            memset(&ret->state_id, 0, sizeof(ret->state_id));
-            ret->view = -1;
-            ret->status = WSREP_VIEW_NON_PRIMARY;
-            ret->state_gap = false;
-            ret->my_idx = -1;
-            ret->memb_num = 0;
-            ret->proto_ver = -1;
+            assert(-1 == ret->my_idx);
+            ret->my_idx = my_idx;
+            assert(ret->my_idx < ret->memb_num);
+            my_uuid = ret->members[ret->my_idx].id;
         }
     }
-
+    else
+    {
+        gu_throw_error(ENOMEM) << "Failed to allocate galera view info";
+    }
     return ret;
 }
 

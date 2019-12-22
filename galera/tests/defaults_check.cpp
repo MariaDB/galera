@@ -51,7 +51,7 @@ static const char* Defaults[] =
     "evs.suspect_timeout",         "PT5S",
     "evs.use_aggregate",           "true",
     "evs.user_send_window",        "2",
-    "evs.version",                 "0",
+    "evs.version",                 "1",
     "evs.view_forget_timeout",     "P1D",
 #ifndef NDEBUG
     "gcache.debug",                "0",
@@ -59,9 +59,9 @@ static const char* Defaults[] =
     "gcache.dir",                  ".",
     "gcache.keep_pages_size",      "0",
     "gcache.mem_size",             "0",
-    "gcache.name",                 "./galera.cache",
+    "gcache.name",                 "galera.cache",
     "gcache.page_size",            "128M",
-    "gcache.recover",              "no",
+    "gcache.recover",              "yes",
     "gcache.size",                 "128M",
     "gcomm.thread_prio",           "",
     "gcs.fc_debug",                "0",
@@ -102,7 +102,7 @@ static const char* Defaults[] =
     "repl.commit_order",           "3",
     "repl.key_format",             "FLAT8",
     "repl.max_ws_size",            "2147483647",
-    "repl.proto_max",              "9",
+    "repl.proto_max",              "10",
 #ifndef NDEBUG
     "signal",                      "",
 #endif
@@ -170,22 +170,9 @@ struct app_ctx
 };
 
 static enum wsrep_cb_status
-view_cb(void*                    ctx,
-        void*                    recv_ctx,
-        const wsrep_view_info_t* view,
-        const char*              state,
-        size_t                   state_len,
-        void**                   sst_req,
-        size_t*                  sst_req_len)
+conn_cb(void* ctx, const wsrep_view_info_t* view)
 {
-    /* make compilers happy about unused arguments */
-    (void)recv_ctx;
     (void)view;
-    (void)state;
-    (void)state_len;
-    (void)sst_req;
-    (void)sst_req_len;
-
     app_ctx* c(static_cast<app_ctx*>(ctx));
     gu::Lock lock(c->mtx_);
 
@@ -194,12 +181,38 @@ view_cb(void*                    ctx,
         c->connected_ = true;
         c->cond_.broadcast();
     }
+    else
+    {
+        assert(0);
+    }
 
     return WSREP_CB_SUCCESS;
 }
 
-static void
-synced_cb(void* app_ctx) { (void)app_ctx; }
+static enum wsrep_cb_status
+view_cb(void*                    app_ctx,
+        void*                    recv_ctx,
+        const wsrep_view_info_t* view,
+        const char*              state,
+        size_t                   state_len)
+{
+    /* make compilers happy about unused arguments */
+    (void)app_ctx;
+    (void)recv_ctx;
+    (void)view;
+    (void)state;
+    (void)state_len;
+
+    return WSREP_CB_SUCCESS;
+}
+
+static enum wsrep_cb_status
+synced_cb(void* app_ctx)
+{
+    (void)app_ctx;
+
+    return WSREP_CB_SUCCESS;
+}
 
 static void*
 recv_func(void* ctx)
@@ -238,16 +251,17 @@ START_TEST(defaults)
 
             /* Application initial state information. */
             NULL, // const wsrep_gtid_t* state_id
-            NULL, // const char*         state
-            0,    // size_t              state_len
+            NULL, // const wsrep_buf_t*  state
 
             /* Application callbacks */
-            log_cb, // wsrep_log_cb_t      logger_cb
-            view_cb,// wsrep_view_cb_t     view_handler_cb
+            log_cb, // wsrep_log_cb_t         logger_cb
+            conn_cb,// wsrep_connected_cb_t   connected_cb
+            view_cb,// wsrep_view_cb_t        view_handler_cb
+            NULL,   // wsrep_sst_request_cb_t sst_request_cb
+            NULL,   // wsrep_encrypt_cb_t     encrypt_cb
 
             /* Applier callbacks */
             NULL, // wsrep_apply_cb_t      apply_cb
-            NULL, // wsrep_commit_cb_t     commit_cb
             NULL, // wsrep_unordered_cb_t  unordered_cb
 
             /* State Snapshot Transfer callbacks */
@@ -274,7 +288,7 @@ START_TEST(defaults)
 
         /* @todo:there is a race condition in the library when disconnect() is
          * called right after connect() */
-        { /* sync with view callback */
+        { /* sync with connect callback */
             gu::Lock lock(ctx.mtx_);
             while(!ctx.connected_) lock.wait(ctx.cond_);
         }

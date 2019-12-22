@@ -50,10 +50,7 @@ namespace gcache
 
         static diff_type const DIFF_MIN = -DIFF_MAX - 1;
 
-        typedef long long long_long;
-
-        GU_COMPILE_ASSERT(DIFF_MIN < 0, diff_min);
-        GU_COMPILE_ASSERT(DIFF_MIN + MAX_SIZE <= MIN_SIZE, min_diff);
+        GU_COMPILE_ASSERT(DIFF_MIN <=diff_type(MIN_SIZE - MAX_SIZE), min_diff);
 
     }; /* class Limits */
 }

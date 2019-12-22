@@ -24,11 +24,26 @@ namespace gcache
 
 namespace galera
 {
-    class TrxHandle;
-
     namespace ist
     {
         void register_params(gu::Config& conf);
+
+
+        // IST event handler interface
+        class EventHandler
+        {
+        public:
+            // Process transaction from IST
+            virtual void ist_trx(const TrxHandleSlavePtr&, bool must_apply,
+                                 bool preload) = 0;
+            // Process conf change from IST
+            virtual void ist_cc(const gcs_action&, bool must_apply,
+                                bool preload) = 0;
+            // Report IST end
+            virtual void ist_end(int error) = 0;
+        protected:
+            virtual ~EventHandler() {}
+        };
 
         class Receiver
         {
@@ -36,14 +51,24 @@ namespace galera
             static std::string const RECV_ADDR;
             static std::string const RECV_BIND;
 
-            Receiver(gu::Config& conf, TrxHandle::SlavePool&, const char* addr);
+            Receiver(gu::Config& conf, gcache::GCache&,
+                     TrxHandleSlave::Pool& slave_pool,
+                     EventHandler&, const char* addr);
             ~Receiver();
 
-            std::string   prepare(wsrep_seqno_t, wsrep_seqno_t, int);
-            void          ready();
-            int           recv(TrxHandle** trx);
+            std::string   prepare(wsrep_seqno_t       first_seqno,
+                                  wsrep_seqno_t       last_seqno,
+                                  int                 protocol_version,
+                                  const wsrep_uuid_t& source_id);
+
+            // this must be called AFTER SST is processed and we know
+            // the starting point.
+            void          ready(wsrep_seqno_t first);
+
             wsrep_seqno_t finished();
             void          run();
+
+            wsrep_seqno_t first_seqno() const { return first_seqno_; }
 
         private:
 
@@ -57,32 +82,14 @@ namespace galera
             gu::Mutex                                     mutex_;
             gu::Cond                                      cond_;
 
-            class Consumer
-            {
-            public:
-
-                Consumer() : cond_(), trx_(0) { }
-                ~Consumer() { }
-
-                gu::Cond&  cond()              { return cond_; }
-                void       trx(TrxHandle* trx) { trx_ = trx;   }
-                TrxHandle* trx() const         { return trx_;  }
-
-            private:
-
-                // Non-copyable
-                Consumer(const Consumer&);
-                Consumer& operator=(const Consumer&);
-
-                gu::Cond   cond_;
-                TrxHandle* trx_;
-            };
-
-            std::stack<Consumer*> consumers_;
-            wsrep_seqno_t         current_seqno_;
+            wsrep_seqno_t         first_seqno_;
             wsrep_seqno_t         last_seqno_;
+            wsrep_seqno_t         current_seqno_;
             gu::Config&           conf_;
-            TrxHandle::SlavePool& trx_pool_;
+            gcache::GCache&       gcache_;
+            TrxHandleSlave::Pool& slave_pool_;
+            wsrep_uuid_t          source_id_;
+            EventHandler&         handler_;
             gu_thread_t           thread_;
             int                   error_code_;
             int                   version_;
@@ -105,7 +112,12 @@ namespace galera
                    int version);
             virtual ~Sender();
 
-            void send(wsrep_seqno_t first, wsrep_seqno_t last);
+            // first - first trx seqno
+            // last  - last trx seqno
+            // preload_start - the seqno from which sent transactions
+            // are accompanied with index preload flag
+            void send(wsrep_seqno_t first, wsrep_seqno_t last,
+                      wsrep_seqno_t preload_start);
 
             void cancel()
             {
@@ -139,16 +151,20 @@ namespace galera
         class AsyncSenderMap
         {
         public:
-            AsyncSenderMap(GCS_IMPL& gcs, gcache::GCache& gcache)
+            AsyncSenderMap(gcache::GCache& gcache)
                 :
                 senders_(),
                 monitor_(),
-                gcache_(gcache) { }
+                gcache_(gcache)
+            { }
+
             void run(const gu::Config& conf,
                      const std::string& peer,
-                     wsrep_seqno_t,
-                     wsrep_seqno_t,
-                     int);
+                     wsrep_seqno_t first,
+                     wsrep_seqno_t last,
+                     wsrep_seqno_t preload_start,
+                     int           version);
+
             void remove(AsyncSender*, wsrep_seqno_t);
             void cancel();
             gcache::GCache& gcache() { return gcache_; }

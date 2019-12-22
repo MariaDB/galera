@@ -59,10 +59,9 @@ namespace gcache
 
                 bh->size    = size;
                 bh->seqno_g = SEQNO_NONE;
-                bh->seqno_d = SEQNO_ILL;
                 bh->flags   = 0;
                 bh->store   = BUFFER_IN_MEM;
-                bh->ctx     = this;
+                bh->ctx     = reinterpret_cast<BH_ctx_t>(this);
 
                 size_ += size;
 
@@ -77,9 +76,18 @@ namespace gcache
             assert(bh->size > 0);
             assert(bh->size <= size_);
             assert(bh->store == BUFFER_IN_MEM);
-            assert(bh->ctx == this);
+            assert(bh->ctx == reinterpret_cast<BH_ctx_t>(this));
 
             if (SEQNO_NONE == bh->seqno_g) discard (bh);
+        }
+
+        void  repossess(BufferHeader* bh)
+        {
+            assert(bh->size > 0);
+            assert(bh->seqno_g != SEQNO_NONE);
+            assert(bh->store == BUFFER_IN_MEM);
+            assert(bh->ctx == reinterpret_cast<BH_ctx_t>(this));
+            assert(BH_is_released(bh)); // will be marked unreleased by caller
         }
 
         void* realloc (void* ptr, size_type size)

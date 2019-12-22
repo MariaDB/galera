@@ -19,13 +19,9 @@ using namespace galera;
 static void ver3_basic(gu::RecordSet::Version const rsv,
                        WriteSetNG::Version    const wsv)
 {
-    union {
-        wsrep_uuid_t source;
-        size_t alignment;
-    } s;
-    wsrep_uuid_t& source(s.source);
     int const alignment(rsv >= gu::RecordSet::VER2 ? GU_MIN_ALIGNMENT : 1);
     uint16_t const flag1(0xabcd);
+    wsrep_uuid_t source;
     gu_uuid_generate (reinterpret_cast<gu_uuid_t*>(&source), NULL, 0);
     wsrep_conn_id_t const conn(652653);
     wsrep_trx_id_t const  trx(99994952);
@@ -65,7 +61,7 @@ static void ver3_basic(gu::RecordSet::Version const rsv,
     wsrep_seqno_t const seqno(2);
     int const           pa_range(seqno - last_seen);
 
-    wso.set_last_seen(last_seen);
+    wso.finalize(last_seen, 0);
 
     /* concatenate all out buffers */
     std::vector<gu::byte_t> in;
@@ -112,10 +108,10 @@ static void ver3_basic(gu::RecordSet::Version const rsv,
         wsi.verify_checksum();
 
         wsi.set_seqno (seqno, pa_range);
-        fail_unless(wsi.certified(),
-                    "wsi.certified: %d"
-                    "\nwsi.pa_range = %lld\n    pa_range = %lld",
-                    static_cast<int>(wsi.certified()), wsi.pa_range(), pa_range);
+        fail_unless(wsi.pa_range() == pa_range,
+                    "wsi.pa_range = %lld\n    pa_range = %lld",
+                    wsi.pa_range(), pa_range);
+        fail_unless(wsi.certified());
     }
     /* repeat reading buffer after "certification" */
     {
@@ -124,7 +120,7 @@ static void ver3_basic(gu::RecordSet::Version const rsv,
         wsi.verify_checksum();
         fail_unless(wsi.certified());
         fail_if (wsi.seqno() != seqno);
-        fail_if (wsi.flags() != flags);
+        fail_if (wsi.flags() != (flags | WriteSetNG::F_CERTIFIED));
         fail_if (0 == wsi.timestamp());
 
         mark_point();
@@ -295,13 +291,9 @@ END_TEST
 
 static void ver3_annotation(gu::RecordSet::Version const rsv)
 {
-    union {
-        wsrep_uuid_t source;
-        size_t alignment;
-    } s;
-    wsrep_uuid_t& source(s.source);
     int const alignment(rsv >= gu::RecordSet::VER2 ? GU_MIN_ALIGNMENT : 1);
     uint16_t const flag1(0xabcd);
+    wsrep_uuid_t source;
     gu_uuid_generate (reinterpret_cast<gu_uuid_t*>(&source), NULL, 0);
     wsrep_conn_id_t const conn(652653);
     wsrep_trx_id_t const  trx(99994952);
@@ -335,7 +327,7 @@ static void ver3_annotation(gu::RecordSet::Version const rsv)
     fail_if(out_size < (sizeof(data) + annotation.size()));
 
     wsrep_seqno_t const last_seen(1);
-    wso.set_last_seen(last_seen);
+    wso.finalize(last_seen, 0);
 
     /* concatenate all out buffers */
     std::vector<gu::byte_t> in;

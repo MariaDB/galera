@@ -14,6 +14,7 @@ libgaleraxx_env.Append(CPPPATH = Split('''
 
 libgaleraxx_srcs = [
     'mapped_buffer.cpp',
+    'key_data.cpp',
     'write_set.cpp',
     'data_set.cpp',
     'key_set.cpp',
@@ -28,9 +29,11 @@ libgaleraxx_srcs = [
     'gcs_action_source.cpp',
     'galera_info.cpp',
     'replicator.cpp',
+    'ist_proto.cpp',
     'ist.cpp',
     'gcs_dummy.cpp',
-    'saved_state.cpp'
+    'saved_state.cpp',
+    'galera_view.cpp'
 ]
 
 objs = libgaleraxx_env.Object(libgaleraxx_srcs)

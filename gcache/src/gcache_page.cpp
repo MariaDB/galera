@@ -72,8 +72,7 @@ gcache::Page::malloc (size_type size)
 
         bh->size    = size;
         bh->seqno_g = SEQNO_NONE;
-        bh->seqno_d = SEQNO_ILL;
-        bh->ctx     = this;
+        bh->ctx     = reinterpret_cast<BH_ctx_t>(this);
         bh->flags   = 0;
         bh->store   = BUFFER_IN_PAGE;
 
@@ -129,7 +128,7 @@ gcache::Page::realloc (void* ptr, size_type size)
     }
     else
     {
-        if (gu_likely(size > bh->size))
+        if (gu_likely(size > 0 && uint32_t(size) > bh->size))
         {
             void* const ret (malloc (size));
 

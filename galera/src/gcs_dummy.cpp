@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2011-2012 Codership Oy <info@codership.com>
+// Copyright (C) 2011-2015 Codership Oy <info@codership.com>
 //
 
 #include "galera_gcs.hpp"
@@ -19,7 +19,7 @@ namespace galera
         cond_          (),
         global_seqno_  (0),
         local_seqno_   (0),
-        uuid_          (),
+        uuid_          (NULL, 0),
         last_applied_  (GCS_SEQNO_ILL),
         state_         (S_OPEN),
         schedule_      (0),
@@ -30,9 +30,7 @@ namespace galera
         repl_proto_ver_(repl_proto_ver),
         appl_proto_ver_(appl_proto_ver),
         report_last_applied_(false)
-    {
-        gu_uuid_generate (&uuid_, 0, 0);
-    }
+    {}
 
     DummyGcs::DummyGcs()
         :
@@ -42,7 +40,7 @@ namespace galera
         cond_          (),
         global_seqno_  (0),
         local_seqno_   (0),
-        uuid_          (),
+        uuid_          (NULL, 0),
         last_applied_  (GCS_SEQNO_ILL),
         state_         (S_OPEN),
         schedule_      (0),
@@ -53,9 +51,7 @@ namespace galera
         repl_proto_ver_(1),
         appl_proto_ver_(1),
         report_last_applied_(false)
-    {
-        gu_uuid_generate (&uuid_, 0, 0);
-    }
+    {}
 
     DummyGcs::~DummyGcs()
     {
@@ -72,44 +68,43 @@ namespace galera
     ssize_t
     DummyGcs::generate_cc (bool primary)
     {
-        cc_size_ = sizeof(gcs_act_conf_t) +
-            primary *
-            (my_name_.length() + incoming_.length() + GU_UUID_STR_LEN + 3);
+        gcs_act_cchange cc;
 
-        cc_ = ::malloc(cc_size_);
+        gcs_node_state_t const my_state
+            (primary ? GCS_NODE_STATE_JOINED : GCS_NODE_STATE_NON_PRIM);
+
+        if (primary)
+        {
+            ++global_seqno_;
+
+            cc.seqno   = global_seqno_;
+            cc.conf_id = 1;
+            cc.uuid    = *uuid_.ptr();
+            cc.repl_proto_ver = repl_proto_ver_;
+            cc.appl_proto_ver = appl_proto_ver_;
+
+            /* we have single member here */
+            gcs_act_cchange::member m;
+
+            m.uuid_     = *uuid_.ptr();
+            m.name_     = my_name_;
+            m.incoming_ = incoming_;
+            m.state_    = my_state;
+
+            cc.memb.push_back(m);
+        }
+        else
+        {
+            cc.seqno    = GCS_SEQNO_ILL;
+            cc.conf_id  = -1;
+        }
+
+        cc_size_ = cc.write(&cc_);
 
         if (!cc_)
         {
             cc_size_ = 0;
             return -ENOMEM;
-        }
-
-        gcs_act_conf_t* const cc(reinterpret_cast<gcs_act_conf_t*>(cc_));
-
-        if (primary)
-        {
-            cc->seqno = global_seqno_;
-            cc->conf_id = 1;
-            memcpy (cc->uuid, &uuid_, sizeof(uuid_));
-            cc->memb_num = 1;
-            cc->my_idx = 0;
-            cc->my_state = GCS_NODE_STATE_JOINED;
-            cc->repl_proto_ver = repl_proto_ver_;
-            cc->appl_proto_ver = appl_proto_ver_;
-
-            char* const str(cc->data);
-            ssize_t offt(0);
-            offt += gu_uuid_print (&uuid_, str, GU_UUID_STR_LEN+1) + 1;
-            offt += sprintf (str + offt, "%s", my_name_.c_str()) + 1;
-            sprintf (str + offt, "%s", incoming_.c_str());
-        }
-        else
-        {
-            cc->seqno    = GCS_SEQNO_ILL;
-            cc->conf_id  = -1;
-            cc->memb_num = 0;
-            cc->my_idx   = -1;
-            cc->my_state = GCS_NODE_STATE_NON_PRIM;
         }
 
         return cc_size_;
@@ -126,7 +121,6 @@ namespace galera
 
         if (ret > 0)
         {
-            //          state_ = S_CONNECTED;
             cond_.signal();
             ret = 0;
         }
@@ -135,17 +129,16 @@ namespace galera
     }
 
     ssize_t
-    DummyGcs::set_initial_position(const wsrep_uuid_t& uuid,
-                                   gcs_seqno_t seqno)
+    DummyGcs::set_initial_position(const gu::GTID& gtid)
     {
         gu::Lock lock(mtx_);
 
-        if (memcmp(&uuid, &GU_UUID_NIL, sizeof(wsrep_uuid_t)) &&
-            seqno >= 0)
+        if (gtid.uuid() != GU_UUID_NIL && gtid.seqno() >= 0)
         {
-            uuid_ = *(reinterpret_cast<const gu_uuid_t*>(&uuid));
-            global_seqno_ = seqno;
+            uuid_ = gtid.uuid();
+            global_seqno_ = gtid.seqno();
         }
+
         return 0;
     }
 
@@ -166,9 +159,8 @@ namespace galera
     ssize_t
     DummyGcs::generate_seqno_action (gcs_action& act, gcs_act_type_t type)
     {
-        gcs_seqno_t* const seqno(
-            reinterpret_cast<gcs_seqno_t*>(
-                ::malloc(sizeof(gcs_seqno_t))));
+        gcs_seqno_t* const seqno
+            (static_cast<gcs_seqno_t*>(::malloc(sizeof(gcs_seqno_t))));
 
         if (!seqno) return -ENOMEM;
 
@@ -176,7 +168,7 @@ namespace galera
         ++local_seqno_;
 
         act.buf     = seqno;
-        act.size    = sizeof(gcs_seqno_t);
+        act.size    = sizeof(*seqno);
         act.seqno_l = local_seqno_;
         act.type    = type;
 
@@ -200,22 +192,25 @@ namespace galera
                 act.buf     = cc_;
                 act.size    = cc_size_;
                 act.seqno_l = local_seqno_;
-                act.type    = GCS_ACT_CONF;
+                act.type    = GCS_ACT_CCHANGE;
 
                 cc_      = 0;
                 cc_size_ = 0;
 
-                const gcs_act_conf_t* const cc(
-                    reinterpret_cast<const gcs_act_conf_t*>(act.buf));
+                gcs_act_cchange const cc(act.buf, act.size);
 
-                if (cc->my_idx < 0)
+                act.seqno_g = (cc.conf_id >= 0 ? 0 : -1);
+
+                int const my_idx(act.seqno_g);
+
+                if (my_idx < 0)
                 {
-                    assert (0 == cc->memb_num);
+                    assert (0 == cc.memb.size());
                     state_ = S_CLOSED;
                 }
                 else
                 {
-                    assert (1 == cc->memb_num);
+                    assert (1 == cc.memb.size());
                     state_ = S_CONNECTED;
                 }
 

@@ -1,16 +1,12 @@
 /*
- * Copyright (C) 2008 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2015 Codership Oy <info@codership.com>
  *
  * $Id$
  */
 
-#include <check.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
-
-#include "gcs_defrag_test.hpp"
 #include "../gcs_defrag.hpp"
+
+#include "gcs_defrag_test.hpp" // must be included last
 
 #define TRUE (0 == 0)
 #define FALSE (!TRUE)
@@ -65,7 +61,7 @@ START_TEST (gcs_defrag_test)
     frg1.frag      = frag1;
     frg1.frag_len  = frag1_len;
     frg1.frag_no   = 0;
-    frg1.act_type  = GCS_ACT_TORDERED;
+    frg1.act_type  = GCS_ACT_WRITESET;
     frg1.proto_ver = 0;
 
     // normal fragments

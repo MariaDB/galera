@@ -143,6 +143,9 @@ int
 gu_uuid_compare (const gu_uuid_t* left,
                  const gu_uuid_t* right)
 {
+    GU_ASSERT_ALIGNMENT(*left);
+    GU_ASSERT_ALIGNMENT(*right);
+
     return memcmp (left, right, sizeof(gu_uuid_t));
 }
 
@@ -161,7 +164,7 @@ uuid_time (const gu_uuid_t* uuid)
     return uuid_time;
 }
 
-/** 
+/**
  * Compare ages of two UUIDs
  * @return -1, 0, 1 if left is respectively younger, equal or older than right
  */

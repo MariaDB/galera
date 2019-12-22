@@ -21,7 +21,10 @@ static const std::string GCACHE_PARAMS_DEBUG      ("gcache.debug");
 static const std::string GCACHE_DEFAULT_DEBUG     ("0");
 #endif
 static const std::string GCACHE_PARAMS_RECOVER    ("gcache.recover");
-static const std::string GCACHE_DEFAULT_RECOVER   ("no");
+static const std::string GCACHE_DEFAULT_RECOVER   ("yes");
+
+const std::string&
+gcache::GCache::PARAMS_DIR                 (GCACHE_PARAMS_DIR);
 
 void
 gcache::GCache::Params::register_params(gu::Config& cfg)
@@ -38,7 +41,7 @@ gcache::GCache::Params::register_params(gu::Config& cfg)
     cfg.add(GCACHE_PARAMS_RECOVER,         GCACHE_DEFAULT_RECOVER);
 }
 
-static const std::string&
+static const std::string
 name_value (gu::Config& cfg, const std::string& data_dir)
 {
     std::string dir(cfg.get(GCACHE_PARAMS_DIR));
@@ -57,10 +60,9 @@ name_value (gu::Config& cfg, const std::string& data_dir)
     if ('/' != rb_name[0] && !dir.empty())
     {
         rb_name = dir + '/' + rb_name;
-        cfg.set (GCACHE_PARAMS_RB_NAME, rb_name);
     }
 
-    return cfg.get(GCACHE_PARAMS_RB_NAME);
+    return rb_name;
 }
 
 gcache::GCache::Params::Params (gu::Config& cfg, const std::string& data_dir)

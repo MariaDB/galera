@@ -16,6 +16,8 @@
 #include "gu_macros.h"
 #include "gu_arch.h" // GU_ASSERT_ALIGNMENT()
 
+#include <wsrep_api.h>
+
 #include <string.h>
 
 #ifdef __cplusplus
@@ -25,10 +27,8 @@ extern "C" {
 /*! UUID internally is represented as a BE integer which allows using
  *  memcmp() as comparison function and straightforward printing */
 #define GU_UUID_LEN 16
-typedef union {
-    uint8_t   data[GU_UUID_LEN];
-    gu_word_t alignment;
-} gu_uuid_t;
+
+typedef wsrep_uuid_t gu_uuid_t;
 
 static gu_uuid_t const GU_UUID_NIL = {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}};
 

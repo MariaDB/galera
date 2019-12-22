@@ -1,8 +1,9 @@
 //
-// Copyright (C) 2010-2014 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2017 Codership Oy <info@codership.com>
 //
 
 #include "key_data.hpp"
+#include "gu_serialize.hpp"
 
 #if defined(GALERA_MULTIMASTER)
 #include "replicator_smm.hpp"
@@ -19,6 +20,8 @@
 using galera::KeyOS;
 using galera::WriteSet;
 using galera::TrxHandle;
+using galera::TrxHandleMaster;
+using galera::TrxHandleSlave;
 using galera::TrxHandleLock;
 
 
@@ -64,30 +67,14 @@ wsrep_status_t galera_init(wsrep_t* gh, const struct wsrep_init_args* args)
 
 
 extern "C"
-uint64_t galera_capabilities(wsrep_t* gh)
+wsrep_cap_t galera_capabilities(wsrep_t* gh)
 {
     assert(gh != 0);
     assert(gh->ctx != 0);
 
-    static uint64_t const v4_caps(WSREP_CAP_MULTI_MASTER         |
-                                  WSREP_CAP_CERTIFICATION        |
-                                  WSREP_CAP_PARALLEL_APPLYING    |
-                                  WSREP_CAP_TRX_REPLAY           |
-                                  WSREP_CAP_ISOLATION            |
-                                  WSREP_CAP_PAUSE                |
-                                  WSREP_CAP_CAUSAL_READS);
-
-    static uint64_t const v5_caps(WSREP_CAP_INCREMENTAL_WRITESET |
-                                  WSREP_CAP_UNORDERED            |
-                                  WSREP_CAP_PREORDERED);
-
-    uint64_t caps(v4_caps);
-
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
 
-    if (repl->repl_proto_ver() >= 5) caps |= v5_caps;
-
-    return caps;
+    return repl->capabilities();
 }
 
 
@@ -164,6 +151,11 @@ char* galera_parameters_get (wsrep_t* gh)
     }
 }
 
+extern "C"
+wsrep_status_t galera_enc_set_key(wsrep_t* gh, const wsrep_enc_key_t*key)
+{
+    return WSREP_NOT_IMPLEMENTED;
+}
 
 extern "C"
 wsrep_status_t galera_connect (wsrep_t*     gh,
@@ -199,7 +191,7 @@ wsrep_status_t galera_connect (wsrep_t*     gh,
         log_fatal << "non-standard exception";
         return WSREP_FATAL;
     }
-#endif // ! NDEBUG
+#endif /* NDEBUG */
 }
 
 
@@ -265,53 +257,58 @@ wsrep_status_t galera_recv(wsrep_t *gh, void *recv_ctx)
     {
         log_fatal << "non-standard exception";
     }
-#endif // NDEBUG
 
     return WSREP_FATAL;
+#endif /* NDEBUG */
 }
 
-static TrxHandle*
+static TrxHandleMaster*
 get_local_trx(REPL_CLASS* const        repl,
               wsrep_ws_handle_t* const handle,
               bool const               create)
 {
-    TrxHandle* trx;
+    TrxHandleMaster* trx(0);
+
     assert(handle != 0);
 
     if (handle->opaque != 0)
     {
-        trx = static_cast<TrxHandle*>(handle->opaque);
+        trx = static_cast<TrxHandleMaster*>(handle->opaque);
         assert(trx->trx_id() == handle->trx_id ||
                wsrep_trx_id_t(-1) == handle->trx_id);
-        trx->ref();
     }
     else
     {
-        trx = repl->get_local_trx(handle->trx_id, create);
-        handle->opaque = trx;
+        try
+        {
+            trx = repl->get_local_trx(handle->trx_id, create).get();
+            handle->opaque = trx;
+        }
+        catch (gu::NotFound& ) { }
     }
 
     return trx;
 }
 
 extern "C"
-wsrep_status_t galera_replay_trx(wsrep_t*            gh,
-                                 wsrep_ws_handle_t*  trx_handle,
-                                 void*               recv_ctx)
+wsrep_status_t galera_replay_trx(wsrep_t*                  gh,
+                                 const wsrep_ws_handle_t*  trx_handle,
+                                 void*                     recv_ctx)
 {
     assert(gh != 0);
     assert(gh->ctx != 0);
 
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
-    TrxHandle* trx(get_local_trx(repl, trx_handle, false));
+    TrxHandleMaster* trx(static_cast<TrxHandleMaster*>(trx_handle->opaque));
     assert(trx != 0);
-
+    assert(trx->ts() != 0);
+    log_debug << "replaying " << *(trx->ts());
     wsrep_status_t retval;
 
     try
     {
         TrxHandleLock lock(*trx);
-        retval = repl->replay_trx(trx, recv_ctx);
+        retval = repl->replay_trx(*trx, lock, recv_ctx);
     }
     catch (std::exception& e)
     {
@@ -325,31 +322,48 @@ wsrep_status_t galera_replay_trx(wsrep_t*            gh,
         retval = WSREP_FATAL;
     }
 
-    repl->unref_local_trx(trx);
-
+    if (retval != WSREP_OK)
+    {
+        log_debug << "replaying failed for " << *(trx->ts());
+    }
     return retval;
 }
 
 
 extern "C"
-wsrep_status_t galera_abort_pre_commit(wsrep_t*       gh,
-                                       wsrep_seqno_t  bf_seqno,
-                                       wsrep_trx_id_t victim_trx)
+wsrep_status_t galera_abort_certification(wsrep_t*       gh,
+                                          wsrep_seqno_t  bf_seqno,
+                                          wsrep_trx_id_t victim_trx,
+                                          wsrep_seqno_t* victim_seqno)
 {
     assert(gh != 0);
     assert(gh->ctx != 0);
+    assert(victim_seqno != 0);
 
-    REPL_CLASS *   repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
-    wsrep_status_t retval;
-    TrxHandle*     trx(repl->get_local_trx(victim_trx));
+    *victim_seqno = WSREP_SEQNO_UNDEFINED;
 
-    if (!trx) return WSREP_OK;
+    REPL_CLASS *     repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
+    wsrep_status_t   retval;
+    galera::TrxHandleMasterPtr txp(repl->get_local_trx(victim_trx));
+
+    if (!txp)
+    {
+        log_debug << "trx to abort " << victim_trx
+                  << " with bf seqno " << bf_seqno
+                  << " not found";
+        return WSREP_OK;
+    }
+    else
+    {
+        log_debug << "ABORTING trx " << victim_trx
+                  << " with bf seqno " << bf_seqno;
+    }
 
     try
     {
-        TrxHandleLock lock(*trx);
-        repl->abort_trx(trx);
-        retval = WSREP_OK;
+        TrxHandleMaster& trx(*txp);
+        TrxHandleLock lock(trx);
+        retval = repl->abort_trx(trx, bf_seqno, victim_seqno);
     }
     catch (std::exception& e)
     {
@@ -362,103 +376,72 @@ wsrep_status_t galera_abort_pre_commit(wsrep_t*       gh,
         retval = WSREP_FATAL;
     }
 
-    repl->unref_local_trx(trx);
+    GU_DBUG_SYNC_WAIT("abort_trx_end");
 
     return retval;
+}
+
+extern "C"
+wsrep_status_t galera_rollback(wsrep_t*                 gh,
+                               wsrep_trx_id_t           trx_id,
+                               const wsrep_buf_t* const data)
+{
+    assert(gh != 0);
+    assert(gh->ctx != 0);
+
+    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
+    galera::TrxHandleMasterPtr victim(repl->get_local_trx(trx_id));
+
+    if (!victim)
+    {
+        log_debug << "trx to rollback " << trx_id << " not found";
+        return WSREP_OK;
+    }
+
+    TrxHandleLock victim_lock(*victim);
+
+    /* Send the rollback fragment from a different context */
+    galera::TrxHandleMasterPtr trx(repl->new_local_trx(trx_id));
+
+    TrxHandleLock lock(*trx);
+    if (data)
+    {
+        gu_trace(trx->append_data(data->ptr, data->len,
+                                  WSREP_DATA_ORDERED, true));
+    }
+    wsrep_trx_meta_t meta;
+    meta.gtid       = WSREP_GTID_UNDEFINED;
+    meta.depends_on = WSREP_SEQNO_UNDEFINED;
+    meta.stid.node  = repl->source_id();
+    meta.stid.trx   = trx_id;
+
+    trx->set_flags(TrxHandle::EXPLICIT_ROLLBACK_FLAGS);
+    trx->set_state(TrxHandle::S_MUST_ABORT);
+    trx->set_state(TrxHandle::S_ABORTING);
+
+    // Victim may already be in S_ABORTING state if it was BF aborted
+    // in pre commit.
+    if (victim->state() != TrxHandle::S_ABORTING)
+    {
+        if (victim->state() != TrxHandle::S_MUST_ABORT)
+            victim->set_state(TrxHandle::S_MUST_ABORT);
+        victim->set_state(TrxHandle::S_ABORTING);
+    }
+
+    return repl->send(*trx, &meta);
 }
 
 static inline void
 discard_local_trx(REPL_CLASS*        repl,
                   wsrep_ws_handle_t* ws_handle,
-                  TrxHandle*         trx)
+                  TrxHandleMaster*   trx)
 {
-    repl->unref_local_trx(trx);
     repl->discard_local_trx(trx);
     ws_handle->opaque = 0;
 }
 
-extern "C"
-wsrep_status_t galera_post_commit (wsrep_t*            gh,
-                                   wsrep_ws_handle_t*  ws_handle)
-{
-    assert(gh != 0);
-    assert(gh->ctx != 0);
-
-    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
-    TrxHandle* trx(get_local_trx(repl, ws_handle, false));
-
-    if (trx == 0)
-    {
-        log_debug << "trx " << ws_handle->trx_id << " not found";
-        return WSREP_OK;
-    }
-
-    wsrep_status_t retval;
-
-    try
-    {
-        TrxHandleLock lock(*trx);
-        retval = repl->post_commit(trx);
-    }
-    catch (std::exception& e)
-    {
-        log_error << e.what();
-        retval = WSREP_NODE_FAIL;
-    }
-    catch (...)
-    {
-        log_fatal << "non-standard exception";
-        retval = WSREP_FATAL;
-    }
-
-    discard_local_trx(repl, ws_handle, trx);
-
-    return retval;
-}
-
-
-extern "C"
-wsrep_status_t galera_post_rollback(wsrep_t*            gh,
-                                    wsrep_ws_handle_t*  ws_handle)
-{
-    assert(gh != 0);
-    assert(gh->ctx != 0);
-
-    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
-    TrxHandle* trx(get_local_trx(repl, ws_handle, false));
-
-    if (trx == 0)
-    {
-        log_debug << "trx " << ws_handle->trx_id << " not found";
-        return WSREP_OK;
-    }
-
-    wsrep_status_t retval;
-
-    try
-    {
-        TrxHandleLock lock(*trx);
-        retval = repl->post_rollback(trx);
-    }
-    catch (std::exception& e)
-    {
-        log_error << e.what();
-        retval = WSREP_NODE_FAIL;
-    }
-    catch (...)
-    {
-        log_fatal << "non-standard exception";
-        retval = WSREP_FATAL;
-    }
-
-    discard_local_trx(repl, ws_handle, trx);
-
-    return retval;
-}
-
-
 static inline void
-append_data_array (TrxHandle*              const trx,
+append_data_array (TrxHandleMaster&              trx,
                    const struct wsrep_buf* const data,
                    size_t                  const count,
                    wsrep_data_type_t       const type,
@@ -466,60 +449,139 @@ append_data_array (TrxHandle*              const trx,
 {
     for (size_t i(0); i < count; ++i)
     {
-        trx->append_data(data[i].ptr, data[i].len, type, copy);
+        gu_trace(trx.append_data(data[i].ptr, data[i].len, type, copy));
     }
 }
 
 
 extern "C"
-wsrep_status_t galera_pre_commit(wsrep_t*           const gh,
-                                 wsrep_conn_id_t    const conn_id,
-                                 wsrep_ws_handle_t* const trx_handle,
-                                 uint32_t           const flags,
-                                 wsrep_trx_meta_t*  const meta)
+wsrep_status_t galera_assign_read_view(wsrep_t*           const  gh,
+                                       wsrep_ws_handle_t* const  handle,
+                                       const wsrep_gtid_t* const rv)
+{
+    return WSREP_NOT_IMPLEMENTED;
+}
+
+
+extern "C"
+wsrep_status_t galera_certify(wsrep_t*           const gh,
+                              wsrep_conn_id_t    const conn_id,
+                              wsrep_ws_handle_t* const trx_handle,
+                              uint32_t           const flags,
+                              wsrep_trx_meta_t*  const meta)
 {
     assert(gh != 0);
     assert(gh->ctx != 0);
 
-    if (meta != 0)
+    REPL_CLASS * const repl(static_cast< REPL_CLASS * >(gh->ctx));
+
+    TrxHandleMaster* txp(get_local_trx(repl, trx_handle, false));
+
+    // The following combinations of flags should not be set together
+    assert(!((flags & WSREP_FLAG_TRX_START) &&
+             (flags & WSREP_FLAG_ROLLBACK)));
+
+    assert(!((flags & WSREP_FLAG_TRX_PREPARE) &&
+             (flags & WSREP_FLAG_ROLLBACK)));
+
+    assert(!((flags & WSREP_FLAG_TRX_PREPARE) &&
+             (flags & WSREP_FLAG_TRX_END)));
+
+    if (gu_unlikely(txp == 0))
     {
-        meta->gtid = WSREP_GTID_UNDEFINED;
-        meta->depends_on = WSREP_SEQNO_UNDEFINED;
-    }
-
-    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
-
-    TrxHandle* trx(get_local_trx(repl, trx_handle, /*rbr_data != 0*/ false));
-
-    if (trx == 0)
-    {
+        if (meta != 0)
+        {
+            meta->gtid       = WSREP_GTID_UNDEFINED;
+            meta->depends_on = WSREP_SEQNO_UNDEFINED;
+            meta->stid.node  = repl->source_id();
+            meta->stid.trx   = -1;
+        }
         // no data to replicate
         return WSREP_OK;
+    }
+
+    TrxHandleMaster& trx(*txp);
+
+    assert(trx.trx_id() != uint64_t(-1));
+
+    if (meta != 0)
+    {
+        meta->gtid       = WSREP_GTID_UNDEFINED;
+        meta->depends_on = WSREP_SEQNO_UNDEFINED;
+        meta->stid.node  = trx.source_id();
+        meta->stid.trx   = trx.trx_id();
     }
 
     wsrep_status_t retval;
 
     try
     {
-        TrxHandleLock lock(*trx);
-        trx->set_conn_id(conn_id);
-//        /* rbr_data should clearly persist over pre_commit() call */
-//        append_data_array (trx, rbr_data, rbr_data_len, false, false);
-        trx->set_flags(TrxHandle::wsrep_flags_to_trx_flags(flags));
+        TrxHandleLock lock(trx);
+
+        trx.set_conn_id(conn_id);
+
+        trx.set_flags(trx.flags() |
+                       TrxHandle::wsrep_flags_to_trx_flags(flags));
+
+        if (flags & WSREP_FLAG_ROLLBACK)
+        {
+            if ((trx.flags() & (TrxHandle::F_BEGIN | TrxHandle::F_ROLLBACK)) ==
+                (TrxHandle::F_BEGIN | TrxHandle::F_ROLLBACK))
+            {
+                return WSREP_TRX_MISSING;
+            }
+
+            trx.set_flags(trx.flags() | TrxHandle::F_PA_UNSAFE);
+            if (trx.state() == TrxHandle::S_ABORTING)
+            {
+                trx.set_state(TrxHandle::S_EXECUTING);
+            }
+        }
 
         retval = repl->replicate(trx, meta);
 
-        assert((!(retval == WSREP_OK || retval == WSREP_BF_ABORT) ||
-                trx->global_seqno() > 0));
+        if (meta)
+        {
+            if (trx.ts())
+            {
+                assert(meta->gtid.seqno > 0);
+                assert(meta->gtid.seqno == trx.ts()->global_seqno());
+                assert(meta->depends_on == trx.ts()->depends_seqno());
+            }
+            else
+            {
+                assert(meta->gtid.seqno == WSREP_SEQNO_UNDEFINED);
+                assert(meta->depends_on == WSREP_SEQNO_UNDEFINED);
+            }
+        }
+
+        assert(trx.trx_id() == meta->stid.trx);
+        assert(!(retval == WSREP_OK || retval == WSREP_BF_ABORT) ||
+               (trx.ts() && trx.ts()->global_seqno() > 0));
 
         if (retval == WSREP_OK)
         {
-            assert(trx->last_seen_seqno() >= 0);
-            retval = repl->pre_commit(trx, meta);
+            assert(trx.state() != TrxHandle::S_MUST_ABORT);
+
+            if ((flags & WSREP_FLAG_ROLLBACK) == 0)
+            {
+                assert(trx.ts() && trx.ts()->last_seen_seqno() >= 0);
+                retval = repl->certify(trx, meta);
+                assert(trx.state() != TrxHandle::S_MUST_ABORT ||
+                       retval != WSREP_OK);
+                if (meta) assert(meta->depends_on >= 0 || retval != WSREP_OK);
+            }
+        }
+        else
+        {
+            if (meta) meta->depends_on = -1;
         }
 
-        assert(retval == WSREP_OK || retval == WSREP_TRX_FAIL ||
-               retval == WSREP_BF_ABORT);
+        assert(retval == WSREP_OK ||       // success
+               retval == WSREP_TRX_FAIL || // cert failure
+               retval == WSREP_BF_ABORT || // BF abort
+               retval == WSREP_CONN_FAIL|| // not in joined/synced state
+               retval == WSREP_NODE_FAIL); // node inconsistent
     }
     catch (gu::Exception& e)
     {
@@ -541,11 +603,282 @@ wsrep_status_t galera_pre_commit(wsrep_t*           const gh,
         retval = WSREP_FATAL;
     }
 
-    repl->unref_local_trx(trx);
+    trx.release_write_set_out();
 
     return retval;
 }
 
+
+extern "C"
+wsrep_status_t galera_commit_order_enter(
+    wsrep_t*                 const gh,
+    const wsrep_ws_handle_t* const ws_handle,
+    const wsrep_trx_meta_t*  const meta
+    )
+{
+    assert(gh        != 0);
+    assert(gh->ctx   != 0);
+    assert(ws_handle != 0);
+
+    REPL_CLASS * const repl(static_cast< REPL_CLASS * >(gh->ctx));
+    TrxHandle* const txp(static_cast<TrxHandle*>(ws_handle->opaque));
+    assert(NULL != txp);
+    if (txp == 0)
+    {
+        log_warn << "Trx " << ws_handle->trx_id
+                 << " not found for commit order enter";
+        return WSREP_TRX_MISSING;
+    }
+
+    wsrep_status_t retval;
+
+    try
+    {
+        if (txp->master())
+        {
+            TrxHandleMaster& trx(*reinterpret_cast<TrxHandleMaster*>(txp));
+            TrxHandleLock lock(trx);
+
+            // assert(trx.state() != TrxHandle::S_REPLAYING);
+
+            if (gu_unlikely(trx.state() == TrxHandle::S_MUST_ABORT))
+            {
+                if (trx.ts() && (trx.ts()->flags() & TrxHandle::F_COMMIT))
+                {
+                    trx.set_state(TrxHandle::S_MUST_REPLAY);
+                    return WSREP_BF_ABORT;
+                }
+                else
+                {
+                    trx.set_state(TrxHandle::S_ABORTING);
+                    return WSREP_TRX_FAIL;
+                }
+            }
+
+            retval = repl->commit_order_enter_local(trx);
+        }
+        else
+        {
+            TrxHandleSlave& ts(*reinterpret_cast<TrxHandleSlave*>(txp));
+            retval = repl->commit_order_enter_remote(ts);
+        }
+    }
+    catch (std::exception& e)
+    {
+        log_error << e.what();
+        retval = WSREP_NODE_FAIL;
+    }
+    catch (...)
+    {
+        log_fatal << "non-standard exception";
+        retval = WSREP_FATAL;
+    }
+
+    return retval;
+}
+
+extern "C"
+wsrep_status_t galera_commit_order_leave(
+    wsrep_t*                 const gh,
+    const wsrep_ws_handle_t* const ws_handle,
+    const wsrep_trx_meta_t*  const meta,
+    const wsrep_buf_t*       const error
+    )
+{
+    assert(gh != 0);
+    assert(gh->ctx != 0);
+    assert(ws_handle != 0);
+
+    REPL_CLASS * const repl(static_cast< REPL_CLASS * >(gh->ctx));
+    TrxHandle* const txp(static_cast<TrxHandle*>(ws_handle->opaque));
+    assert(NULL != txp);
+
+    if (txp == NULL)
+    {
+        log_warn << "Trx " << ws_handle->trx_id
+                 << " not found for commit order leave";
+        return WSREP_TRX_MISSING;
+    }
+
+    wsrep_status_t retval;
+
+    try
+    {
+        if (txp->master())
+        {
+            TrxHandleMaster& trx(*reinterpret_cast<TrxHandleMaster*>(txp));
+            TrxHandleLock lock(trx);
+            assert(trx.ts() && trx.ts()->global_seqno() > 0);
+
+            if (trx.state() == TrxHandle::S_MUST_ABORT)
+            {
+                // Trx is non-committing streaming replication and
+                // the trx was BF aborted while committing a fragment.
+                // At this point however, we can't know if the
+                // fragment is already committed into DBMS fragment storage
+                // or not, so we return a success. The BF abort error
+                // is returned to the caller from galera_release().
+                assert(!(trx.ts()->flags() & TrxHandle::F_COMMIT));
+                trx.set_state(TrxHandle::S_ABORTING);
+                retval = repl->commit_order_leave(*trx.ts(), error);
+                trx.set_deferred_abort(true);
+            }
+            else
+            {
+                retval = repl->commit_order_leave(*trx.ts(), error);
+                assert(trx.state() == TrxHandle::S_ROLLING_BACK ||
+                       trx.state() == TrxHandle::S_COMMITTING ||
+                       !(trx.ts()->flags() & TrxHandle::F_COMMIT));
+                trx.set_state(trx.state() == TrxHandle::S_ROLLING_BACK ?
+                              TrxHandle::S_ROLLED_BACK :
+                              TrxHandle::S_COMMITTED);
+            }
+        }
+        else
+        {
+            TrxHandleSlave& ts(*reinterpret_cast<TrxHandleSlave*>(txp));
+            retval = repl->commit_order_leave(ts, error);
+        }
+    }
+    catch (std::exception& e)
+    {
+        log_error << "commit_order_leave(): " << e.what();
+        retval = WSREP_NODE_FAIL;
+    }
+    catch (...)
+    {
+        log_fatal << "commit_order_leave(): non-standard exception";
+        retval = WSREP_FATAL;
+    }
+
+    return retval;
+}
+
+
+extern "C"
+wsrep_status_t galera_release(wsrep_t*            gh,
+                              wsrep_ws_handle_t*  ws_handle)
+{
+    assert(gh != 0);
+    assert(gh->ctx != 0);
+
+    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
+    TrxHandleMaster* txp(get_local_trx(repl, ws_handle, false));
+
+    if (txp == 0)
+    {
+        log_debug << "trx " << ws_handle->trx_id
+                  << " not found for release";
+        return WSREP_OK;
+    }
+
+    wsrep_status_t retval;
+    bool discard_trx(true);
+
+    try
+    {
+        TrxHandleMaster& trx(*txp);
+        TrxHandleLock lock(trx);
+
+        if (trx.state() == TrxHandle::S_MUST_ABORT)
+        {
+            // This is possible in case of ALG due to a race: BF applier BF
+            // aborts trx that has already grabbed commit monitor and is
+            // committing. This is possible only if aborter is ordered after
+            // the victim, and since for regular committing transactions such
+            // abort is unnecessary, this should be possible only for ongoing
+            // streaming transactions.
+
+            galera::TrxHandleSlavePtr ts(trx.ts());
+
+            if (ts && ts->flags() & TrxHandle::F_COMMIT)
+            {
+                log_warn << "trx was BF aborted during commit: " << *ts;
+                assert(0);
+                // manipulate state to avoid crash
+                trx.set_state(TrxHandle::S_MUST_REPLAY);
+                trx.set_state(TrxHandle::S_REPLAYING);
+            }
+            else
+            {
+                // Streaming replication, not in commit phase. Must abort.
+                log_debug << "SR trx was BF aborted during commit: " << trx;
+                trx.set_state(TrxHandle::S_ABORTING);
+            }
+        }
+
+        if (gu_likely(trx.state() == TrxHandle::S_COMMITTED))
+        {
+            assert(!trx.deferred_abort());
+            retval = repl->release_commit(trx);
+
+            assert(trx.state() == TrxHandle::S_COMMITTED ||
+                   trx.state() == TrxHandle::S_EXECUTING);
+
+            if (trx.state() == TrxHandle::S_EXECUTING &&
+                retval == WSREP_OK)
+            {
+                // SR trx ready for new fragment, keep transaction
+                discard_trx = false;
+            }
+        }
+        else if (trx.deferred_abort() == false)
+        {
+            retval = repl->release_rollback(trx);
+
+            assert(trx.state() == TrxHandle::S_ROLLED_BACK);
+        }
+        else if (trx.state() == TrxHandle::S_ABORTING)
+        {
+            assert(trx.deferred_abort());
+            // SR trx was BF aborted before commit_order_leave()
+            // We return BF abort error code here and do not clean up
+            // the transaction. The transaction is needed for sending
+            // rollback fragment.
+            retval = WSREP_BF_ABORT;
+            discard_trx = false;
+            trx.set_deferred_abort(false);
+        }
+        else
+        {
+            assert(0);
+            gu_throw_fatal << "Internal program error: "
+                "unexpected state in deferred abort trx: " << trx;
+        }
+
+        switch(trx.state())
+        {
+        case TrxHandle::S_COMMITTED:
+        case TrxHandle::S_ROLLED_BACK:
+        case TrxHandle::S_EXECUTING:
+        case TrxHandle::S_ABORTING:
+            break;
+        default:
+            assert(0);
+            gu_throw_fatal << "Internal library error: "
+                "unexpected trx release state: " << trx;
+        }
+    }
+    catch (std::exception& e)
+    {
+        log_error << e.what();
+        assert(0);
+        retval = WSREP_NODE_FAIL;
+    }
+    catch (...)
+    {
+        log_fatal << "non-standard exception";
+        assert(0);
+        retval = WSREP_FATAL;
+    }
+
+    if (discard_trx)
+    {
+        discard_local_trx(repl, ws_handle, txp);
+    }
+
+    return retval;
+}
 
 extern "C"
 wsrep_status_t galera_append_key(wsrep_t*           const gh,
@@ -559,7 +892,7 @@ wsrep_status_t galera_append_key(wsrep_t*           const gh,
     assert(gh->ctx != 0);
 
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
-    TrxHandle* trx(get_local_trx(repl, trx_handle, true));
+    TrxHandleMaster* trx(get_local_trx(repl, trx_handle, true));
     assert(trx != 0);
 
     wsrep_status_t retval;
@@ -574,9 +907,17 @@ wsrep_status_t galera_append_key(wsrep_t*           const gh,
                                keys[i].key_parts_num,
                                key_type,
                                copy);
-            trx->append_key(k);
+            gu_trace(trx->append_key(k));
         }
         retval = WSREP_OK;
+    }
+    catch (gu::Exception& e)
+    {
+        log_warn << e.what();
+        if (EMSGSIZE == e.get_errno())
+            retval = WSREP_SIZE_EXCEEDED;
+        else
+            retval = WSREP_CONN_FAIL; //?
     }
     catch (std::exception& e)
     {
@@ -588,7 +929,6 @@ wsrep_status_t galera_append_key(wsrep_t*           const gh,
         log_fatal << "non-standard exception";
         retval = WSREP_FATAL;
     }
-    repl->unref_local_trx(trx);
 
     return retval;
 }
@@ -613,17 +953,25 @@ wsrep_status_t galera_append_data(wsrep_t*                const wsrep,
     }
 
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(wsrep->ctx));
-    TrxHandle* trx(get_local_trx(repl, trx_handle, true));
-    assert(trx != 0);
+    TrxHandleMaster* txp(get_local_trx(repl, trx_handle, true));
+    assert(txp != 0);
+    TrxHandleMaster& trx(*txp);
 
     wsrep_status_t retval;
 
     try
     {
-        TrxHandleLock lock(*trx);
-        if (WSREP_DATA_ORDERED == type)
-            append_data_array(trx, data, count, type, copy);
+        TrxHandleLock lock(trx);
+        gu_trace(append_data_array(trx, data, count, type, copy));
         retval = WSREP_OK;
+    }
+    catch (gu::Exception& e)
+    {
+        log_warn << e.what();
+        if (EMSGSIZE == e.get_errno())
+            retval = WSREP_SIZE_EXCEEDED;
+        else
+            retval = WSREP_CONN_FAIL; //?
     }
     catch (std::exception& e)
     {
@@ -636,15 +984,15 @@ wsrep_status_t galera_append_data(wsrep_t*                const wsrep,
         retval = WSREP_FATAL;
     }
 
-    repl->unref_local_trx(trx);
-
     return retval;
 }
 
 
 extern "C"
-wsrep_status_t galera_causal_read(wsrep_t*      const wsrep,
-                                  wsrep_gtid_t* const gtid)
+wsrep_status_t galera_sync_wait(wsrep_t*      const wsrep,
+                                wsrep_gtid_t* const upto,
+                                int                 tout,
+                                wsrep_gtid_t* const gtid)
 {
     assert(wsrep != 0);
     assert(wsrep->ctx != 0);
@@ -653,7 +1001,34 @@ wsrep_status_t galera_causal_read(wsrep_t*      const wsrep,
     wsrep_status_t retval;
     try
     {
-        retval = repl->causal_read(gtid);
+        retval = repl->sync_wait(upto, tout, gtid);
+    }
+    catch (std::exception& e)
+    {
+        log_warn << e.what();
+        retval = WSREP_CONN_FAIL;
+    }
+    catch (...)
+    {
+        log_fatal << "non-standard exception";
+        retval = WSREP_FATAL;
+    }
+    return retval;
+}
+
+
+extern "C"
+wsrep_status_t galera_last_committed_id(wsrep_t*      const wsrep,
+                                        wsrep_gtid_t* const gtid)
+{
+    assert(wsrep != 0);
+    assert(wsrep->ctx != 0);
+
+    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(wsrep->ctx));
+    wsrep_status_t retval;
+    try
+    {
+        retval = repl->last_committed_id(gtid);
     }
     catch (std::exception& e)
     {
@@ -691,44 +1066,132 @@ wsrep_status_t galera_to_execute_start(wsrep_t*                const gh,
                                        size_t                  const keys_num,
                                        const struct wsrep_buf* const data,
                                        size_t                  const count,
+                                       uint32_t                const flags,
                                        wsrep_trx_meta_t*       const meta)
 {
     assert(gh != 0);
     assert(gh->ctx != 0);
 
+    // Non-blocking operations "certification" depends on
+    // TRX_START and TRX_END flags, not having those flags may cause
+    // undefined behavior so check them here.
+    assert(flags & (WSREP_FLAG_TRX_START | WSREP_FLAG_TRX_END));
+
+    if ((flags & (WSREP_FLAG_TRX_START | WSREP_FLAG_TRX_END)) == 0)
+    {
+        log_warn << "to_execute_start(): either WSREP_FLAG_TRX_START "
+                 << "or WSREP_FLAG_TRX_END flag is required";
+        return WSREP_CONN_FAIL;
+    }
+
+    // Simultaneous use of TRX_END AND ROLLBACK is not allowed
+    assert(!((flags & WSREP_FLAG_TRX_END) && (flags & WSREP_FLAG_ROLLBACK)));
+
+    if ((flags & WSREP_FLAG_TRX_END) && (flags & WSREP_FLAG_ROLLBACK))
+    {
+        log_warn << "to_execute_start(): simultaneous use of "
+                 << "WSREP_FLAG_TRX_END and WSREP_FLAG_ROLLBACK "
+                 << "is not allowed";
+        return WSREP_CONN_FAIL;
+    }
+
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
 
-    TrxHandle* trx(repl->local_conn_trx(conn_id, true));
-    assert(trx != 0);
+    galera::TrxHandleMasterPtr txp(repl->local_conn_trx(conn_id, true));
+    assert(txp != 0);
+
+    TrxHandleMaster& trx(*txp.get());
+    assert(trx.state() == TrxHandle::S_EXECUTING);
+
+    trx.set_flags(TrxHandle::wsrep_flags_to_trx_flags(
+                      flags | WSREP_FLAG_ISOLATION));
+
+
+    // NBO-end event. Application should have provided the ongoing
+    // operation start event source node id and connection id in
+    // meta->stid.node and meta->stid.conn respectively
+    if (trx.nbo_end() == true)
+    {
+        galera::NBOKey key(meta->gtid.seqno);
+        gu::Buffer buf(galera::NBOKey::serial_size());
+        (void)key.serialize(&buf[0], buf.size(), 0);
+        struct wsrep_buf data_buf = {&buf[0], buf.size()};
+        gu_trace(append_data_array(trx, &data_buf, 1, WSREP_DATA_ORDERED,true));
+    }
+
+    if (meta != 0)
+    {
+        // Don't override trx meta gtid for NBO end yet, gtid is used in
+        // replicator wait_nbo_end() to locate correct nbo context
+        if (trx.nbo_end() == false)
+        {
+            meta->gtid       = WSREP_GTID_UNDEFINED;
+        }
+        meta->depends_on = WSREP_SEQNO_UNDEFINED;
+        meta->stid.node  = trx.source_id();
+        meta->stid.trx   = trx.trx_id();
+        meta->stid.conn  = trx.conn_id();
+    }
 
     wsrep_status_t retval;
 
+#ifdef NDEBUG
     try
+#endif // NDEBUG
     {
-        TrxHandleLock lock(*trx);
+        TrxHandleLock lock(trx);
         for (size_t i(0); i < keys_num; ++i)
         {
             galera::KeyData k(repl->trx_proto_ver(),
                               keys[i].key_parts,
                               keys[i].key_parts_num, WSREP_KEY_EXCLUSIVE,false);
-            trx->append_key(k);
+            gu_trace(trx.append_key(k));
         }
 
-        append_data_array(trx, data, count, WSREP_DATA_ORDERED, false);
+        gu_trace(append_data_array(trx, data, count, WSREP_DATA_ORDERED, false));
 
-        trx->set_flags(TrxHandle::wsrep_flags_to_trx_flags(
-                           WSREP_FLAG_COMMIT |
-                           WSREP_FLAG_ISOLATION));
-
-        retval = repl->replicate(trx, meta);
-
-        assert((retval == WSREP_OK && trx->global_seqno() > 0) ||
-               (retval != WSREP_OK && trx->global_seqno() < 0));
+        if (trx.nbo_end() == false)
+        {
+            retval = repl->replicate(trx, meta);
+            assert((retval == WSREP_OK && trx.ts() != 0 &&
+                    trx.ts()->global_seqno() > 0) ||
+                   (retval != WSREP_OK && (trx.ts() == 0  ||
+                                           trx.ts()->global_seqno() < 0)));
+            if (meta)
+            {
+                if (trx.ts())
+                {
+                    assert(meta->gtid.seqno > 0);
+                    assert(meta->gtid.seqno == trx.ts()->global_seqno());
+                    assert(meta->depends_on == trx.ts()->depends_seqno());
+                }
+                else
+                {
+                    assert(meta->gtid.seqno == WSREP_SEQNO_UNDEFINED);
+                    assert(meta->depends_on == WSREP_SEQNO_UNDEFINED);
+                }
+            }
+        }
+        else
+        {
+            // NBO-end events are broadcasted separately in to_isolation_begin()
+            retval = WSREP_OK;
+        }
 
         if (retval == WSREP_OK)
         {
             retval = repl->to_isolation_begin(trx, meta);
         }
+    }
+#ifdef NDEBUG
+    catch (gu::Exception& e)
+    {
+        log_error << e.what();
+
+        if (e.get_errno() == EMSGSIZE)
+            retval = WSREP_SIZE_EXCEEDED;
+        else
+            retval = WSREP_CONN_FAIL;
     }
     catch (std::exception& e)
     {
@@ -740,15 +1203,12 @@ wsrep_status_t galera_to_execute_start(wsrep_t*                const gh,
         log_fatal << "non-standard exception";
         retval = WSREP_FATAL;
     }
+#endif // NDEBUG
 
-    if (retval != WSREP_OK) // galera_to_execute_end() won't be called
+    if (trx.ts() == NULL || trx.ts()->global_seqno() < 0)
     {
+        // galera_to_execute_end() won't be called
         repl->discard_local_conn_trx(conn_id); // trx is not needed anymore
-
-        if (trx->global_seqno() < 0) // no seqno -> no index -> no automatic purging
-        {
-            trx->unref(); // implicit destructor
-        }
     }
 
     return retval;
@@ -756,39 +1216,43 @@ wsrep_status_t galera_to_execute_start(wsrep_t*                const gh,
 
 
 extern "C"
-wsrep_status_t galera_to_execute_end(wsrep_t*        const gh,
-                                     wsrep_conn_id_t const conn_id)
+wsrep_status_t galera_to_execute_end(wsrep_t*           const gh,
+                                     wsrep_conn_id_t    const conn_id,
+                                     const wsrep_buf_t* const err)
 {
     assert(gh != 0);
     assert(gh->ctx != 0);
 
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
 
-    TrxHandle* trx(repl->local_conn_trx(conn_id, false));
+    galera::TrxHandleMasterPtr trx(repl->local_conn_trx(conn_id, false));
 
+    assert(trx != 0);
     if (trx == 0)
     {
-        log_warn << "Could not find local connection object for "
-                 << conn_id;
-        return WSREP_WARNING;
+        log_warn << "No trx handle for connection " << conn_id
+                 << " in galera_to_execute_end()";
+        return WSREP_CONN_FAIL;
     }
 
     wsrep_status_t ret(WSREP_OK);
     try
     {
         TrxHandleLock lock(*trx);
-        repl->to_isolation_end(trx);
+        repl->to_isolation_end(*trx, err);
     }
     catch (std::exception& e)
     {
-        log_warn << e.what();
-        ret = WSREP_CONN_FAIL;
+        log_error << "to_execute_end(): " << e.what();
+        ret = WSREP_NODE_FAIL;
     }
     catch (...)
     {
-        log_fatal << "non-standard exception";
+        log_fatal << "to_execute_end(): non-standard exception";
         ret = WSREP_FATAL;
     }
+    gu_trace(repl->discard_local_conn_trx(conn_id));
+
 
     // trx will be unreferenced (destructed) during purge
     repl->discard_local_conn_trx(conn_id);
@@ -829,12 +1293,12 @@ galera_preordered_collect (wsrep_t* const gh,
 
 
 extern "C" wsrep_status_t
-galera_preordered_commit (wsrep_t* const gh,
-                          wsrep_po_handle_t*      const handle,
-                          const wsrep_uuid_t*     const source_id,
-                          uint32_t                const flags,
-                          int                     const pa_range,
-                          wsrep_bool_t            const commit)
+galera_preordered_commit (wsrep_t*            const gh,
+                          wsrep_po_handle_t*  const handle,
+                          const wsrep_uuid_t* const source_id,
+                          uint32_t            const flags,
+                          int                 const pa_range,
+                          wsrep_bool_t        const commit)
 {
     assert(gh != 0);
     assert(gh->ctx != 0);
@@ -881,8 +1345,7 @@ wsrep_status_t galera_sst_sent (wsrep_t*            const gh,
 extern "C"
 wsrep_status_t galera_sst_received (wsrep_t*            const gh,
                                     const wsrep_gtid_t* const state_id,
-                                    const void*         const state,
-                                    size_t              const state_len,
+                                    const wsrep_buf_t*  const state,
                                     int                 const rcode)
 {
     assert(gh       != 0);
@@ -894,15 +1357,14 @@ wsrep_status_t galera_sst_received (wsrep_t*            const gh,
 
     if (rcode < 0) { assert(state_id->seqno == WSREP_SEQNO_UNDEFINED); }
 
-    return repl->sst_received(*state_id, state, state_len, rcode);
+    return repl->sst_received(*state_id, state, rcode);
 }
 
 
 extern "C"
-wsrep_status_t galera_snapshot(wsrep_t*    wsrep,
-                               const void* msg,
-                               size_t      msg_len,
-                               const char* donor_spec)
+wsrep_status_t galera_snapshot(wsrep_t*           const wsrep,
+                               const wsrep_buf_t* const msg,
+                               const char*        const donor_spec)
 {
     return WSREP_NOT_IMPLEMENTED;
 }
@@ -1069,17 +1531,22 @@ static wsrep_t galera_str = {
     &galera_capabilities,
     &galera_parameters_set,
     &galera_parameters_get,
+    &galera_enc_set_key,
     &galera_connect,
     &galera_disconnect,
     &galera_recv,
-    &galera_pre_commit,
-    &galera_post_commit,
-    &galera_post_rollback,
+    &galera_assign_read_view,
+    &galera_certify,
+    &galera_commit_order_enter,
+    &galera_commit_order_leave,
+    &galera_release,
     &galera_replay_trx,
-    &galera_abort_pre_commit,
+    &galera_abort_certification,
+    &galera_rollback,
     &galera_append_key,
     &galera_append_data,
-    &galera_causal_read,
+    &galera_sync_wait,
+    &galera_last_committed_id,
     &galera_free_connection,
     &galera_to_execute_start,
     &galera_to_execute_end,

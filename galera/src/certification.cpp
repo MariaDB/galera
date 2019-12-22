@@ -3,13 +3,13 @@
 //
 
 #include "certification.hpp"
-#include "uuid.hpp"
 
 #include "gu_lock.hpp"
 #include "gu_throw.hpp"
 
 #include <map>
 #include <algorithm> // std::for_each
+
 
 using namespace galera;
 
@@ -70,81 +70,34 @@ length_check(const gu::Config& conf)
         return gu::Config::from_config<int>(CERT_PARAM_LENGTH_CHECK_DEFAULT);
 }
 
-void
-galera::Certification::purge_for_trx_v1to2(TrxHandle* trx)
+// Purge key set from given index
+static void purge_key_set(galera::Certification::CertIndexNG& cert_index,
+                          galera::TrxHandleSlave*             ts,
+                          const galera::KeySetIn&             key_set,
+                          const long                          count)
 {
-    TrxHandle::CertKeySet& refs(trx->cert_keys_);
-
-    // Unref all referenced and remove if was referenced only by us
-    for (TrxHandle::CertKeySet::iterator i = refs.begin(); i != refs.end();
-         ++i)
+    for (long i(0); i < count; ++i)
     {
-        KeyEntryOS* const kel(i->first);
-
-        const bool full_key(i->second.first);
-        const bool shared(i->second.second);
-
-        CertIndex::iterator ci(cert_index_.find(kel));
-        assert(ci != cert_index_.end());
-        KeyEntryOS* const ke(*ci);
-
-        if (shared == false &&
-            (ke->ref_trx() == trx || ke->ref_full_trx() == trx))
+        const galera::KeySet::KeyPart& kp(key_set.next());
+        galera::KeyEntryNG ke(kp);
+        galera::Certification::CertIndexNG::iterator ci(cert_index.find(&ke));
+        assert(ci != cert_index.end());
+        if (ci == cert_index.end())
         {
-            ke->unref(trx, full_key);
-        }
-
-        if (shared == true &&
-            (ke->ref_shared_trx() == trx || ke->ref_full_shared_trx() == trx))
-        {
-            ke->unref_shared(trx, full_key);
-        }
-
-        if (ke->ref_trx() == 0 && ke->ref_shared_trx() == 0)
-        {
-            assert(ke->ref_full_trx() == 0);
-            assert(ke->ref_full_shared_trx() == 0);
-            delete ke;
-            cert_index_.erase(ci);
-        }
-
-        if (kel != ke) delete kel;
-    }
-}
-
-void
-galera::Certification::purge_for_trx_v3(TrxHandle* trx)
-{
-    const KeySetIn& keys(trx->write_set_in().keyset());
-    keys.rewind();
-
-    // Unref all referenced and remove if was referenced only by us
-    for (long i = 0; i < keys.count(); ++i)
-    {
-        const KeySet::KeyPart& kp(keys.next());
-
-        KeyEntryNG ke(kp);
-        CertIndexNG::iterator const ci(cert_index_ng_.find(&ke));
-
-//        assert(ci != cert_index_ng_.end());
-        if (gu_unlikely(cert_index_ng_.end() == ci))
-        {
-            log_warn << "Missing key";
+            log_warn << "Could not find key from index";
             continue;
         }
+        galera::KeyEntryNG* const kep(*ci);
+        assert(kep->referenced() == true);
 
-        KeyEntryNG* const kep(*ci);
-        assert(kep->referenced());
+        wsrep_key_type_t const p(kp.wsrep_type(ts->version()));
 
-        wsrep_key_type_t const p(kp.wsrep_type(trx->version()));
-
-        if (kep->ref_trx(p) == trx)
+        if (kep->ref_trx(p) == ts)
         {
-            kep->unref(p, trx);
-
+            kep->unref(p, ts);
             if (kep->referenced() == false)
             {
-                cert_index_ng_.erase(ci);
+                cert_index.erase(ci);
                 delete kep;
             }
         }
@@ -152,343 +105,43 @@ galera::Certification::purge_for_trx_v3(TrxHandle* trx)
 }
 
 void
-galera::Certification::purge_for_trx(TrxHandle* trx)
+galera::Certification::purge_for_trx(TrxHandleSlave* trx)
 {
-    if (trx->new_version())
-        purge_for_trx_v3(trx);
-    else
-        purge_for_trx_v1to2(trx);
+    assert(mutex_.owned());
+    assert(trx->version() >= 3 || trx->version() <= 5);
+    const KeySetIn& keys(trx->write_set().keyset());
+    keys.rewind();
+    purge_key_set(cert_index_ng_, trx, keys, keys.count());
 }
 
-
-/*! for convenience returns true if conflict and false if not */
-static inline bool
-certify_and_depend_v1to2(const galera::KeyEntryOS* const match,
-                         galera::TrxHandle*        const trx,
-                         bool                      const full_key,
-                         bool                      const exclusive_key,
-                         bool                      const log_conflict)
-{
-    // 1) if the key is full, match for any trx
-    // 2) if the key is partial, match for trx with full key
-    const galera::TrxHandle* const ref_trx(full_key == true ?
-                                           match->ref_trx() :
-                                           match->ref_full_trx());
-
-    if (cert_debug_on && ref_trx)
-    {
-        cert_debug << "exclusive match ("
-                   << (full_key == true ? "full" : "partial")
-                   << ") " << *trx << " <-----> " << *ref_trx;
-    }
-
-    wsrep_seqno_t const ref_seqno(ref_trx ? ref_trx->global_seqno() : -1);
-
-    // trx should not have any references in index at this point
-    assert(ref_trx != trx);
-
-    if (gu_likely(0 != ref_trx))
-    {
-        // cert conflict takes place if
-        // 1) write sets originated from different nodes, are within cert range
-        // 2) ref_trx is in isolation mode, write sets are within cert range
-        if ((trx->source_id() != ref_trx->source_id() ||
-             (ref_trx->flags() & galera::TrxHandle::F_ISOLATION) != 0) &&
-            ref_seqno >  trx->last_seen_seqno())
-        {
-            if (gu_unlikely(log_conflict == true))
-            {
-                log_info << "trx conflict for key "
-                         << match->get_key(ref_trx->version())
-                         << ": " << *trx << " <--X--> " << *ref_trx;
-            }
-            return true;
-        }
-    }
-
-    wsrep_seqno_t depends_seqno(ref_seqno);
-
-    if (exclusive_key) // exclusive keys must depend on shared refs as well
-    {
-        const galera::TrxHandle* const ref_shared_trx(full_key == true ?
-                                                      match->ref_shared_trx() :
-                                                      match->ref_full_shared_trx());
-        assert(ref_shared_trx != trx);
-
-        if (ref_shared_trx)
-        {
-            cert_debug << "shared match ("
-                       << (full_key == true ? "full" : "partial")
-                       << ") " << *trx << " <-----> " << *ref_shared_trx;
-
-            depends_seqno = std::max(ref_shared_trx->global_seqno(),
-                                     depends_seqno);
-        }
-    }
-
-    trx->set_depends_seqno(std::max(trx->depends_seqno(), depends_seqno));
-
-    return false;
-}
-
-
-static bool
-certify_v1to2(galera::TrxHandle*                trx,
-              galera::Certification::CertIndex& cert_index,
-              const galera::KeyOS&              key,
-              bool const store_keys, bool const log_conflicts)
-{
-    typedef std::list<galera::KeyPartOS> KPS;
-
-    KPS key_parts(key.key_parts<KPS>());
-    KPS::const_iterator begin(key_parts.begin()), end;
-    bool full_key(false);
-    galera::TrxHandle::CertKeySet& key_list(trx->cert_keys());
-
-    for (end = begin; full_key == false; end != key_parts.end() ? ++end : end)
-    {
-        full_key = (end == key_parts.end());
-        galera::Certification::CertIndex::iterator ci;
-        galera::KeyEntryOS ke(key.version(), begin, end, key.flags());
-
-        cert_debug << "key: " << ke.get_key()
-                   << " (" << (full_key == true ? "full" : "partial") << ")";
-
-        bool const shared_key(ke.get_key().flags() & galera::KeyOS::F_SHARED);
-
-        if (store_keys && (key_list.find(&ke) != key_list.end()))
-        {
-            // avoid certification for duplicates
-            // should be removed once we can eleminate dups on deserialization
-            continue;
-        }
-
-        galera::KeyEntryOS* kep;
-
-        if ((ci = cert_index.find(&ke)) == cert_index.end())
-        {
-            if (store_keys)
-            {
-                kep = new galera::KeyEntryOS(ke);
-                ci = cert_index.insert(kep).first;
-                cert_debug << "created new entry";
-            }
-        }
-        else
-        {
-            cert_debug << "found existing entry";
-
-            // Note: For we skip certification for isolated trxs, only
-            // cert index and key_list is populated.
-            if ((trx->flags() & galera::TrxHandle::F_ISOLATION) == 0 &&
-                certify_and_depend_v1to2(*ci, trx, full_key,
-                                         !shared_key, log_conflicts))
-            {
-                return false;
-            }
-
-            if (store_keys)
-            {
-                if (gu_likely(
-                        true == ke.get_key().equal_all((*ci)->get_key())))
-                {
-                    kep = *ci;
-                }
-                else
-                {
-                    // duplicate with different flags - need to store a copy
-                    kep = new galera::KeyEntryOS(ke);
-                }
-            }
-        }
-
-        if (store_keys)
-        {
-            key_list.insert(std::make_pair(kep, std::make_pair(full_key,
-                                                               shared_key)));
-        }
-
-    }
-
-    return true;
-}
-
-
-galera::Certification::TestResult
-galera::Certification::do_test_v1to2(TrxHandle* trx, bool store_keys)
-{
-    cert_debug << "BEGIN CERTIFICATION v1to2: " << *trx;
-#ifndef NDEBUG
-    // to check that cleanup after cert failure returns cert_index_
-    // to original size
-    size_t prev_cert_index_size(cert_index_.size());
-#endif // NDEBUG
-
-    galera::TrxHandle::CertKeySet& key_list(trx->cert_keys_);
-
-    long   key_count(0);
-    size_t offset(0);
-    const gu::byte_t* buf(trx->write_set_buffer().first);
-    const size_t buf_len(trx->write_set_buffer().second);
-
-    while (offset < buf_len)
-    {
-        std::pair<size_t, size_t> k(WriteSet::segment(buf, buf_len, offset));
-
-        // Scan over all keys
-        offset = k.first;
-        while (offset < k.first + k.second)
-        {
-            KeyOS key(trx->version());
-            offset = key.unserialize(buf, buf_len, offset);
-            if (certify_v1to2(trx,
-                              cert_index_,
-                              key,
-                              store_keys,
-                              log_conflicts_) == false)
-            {
-                goto cert_fail;
-            }
-            ++key_count;
-        }
-
-        // Skip data part
-        std::pair<size_t, size_t> d(WriteSet::segment(buf, buf_len, offset));
-        offset = d.first + d.second;
-
-    }
-
-    trx->set_depends_seqno(std::max(trx->depends_seqno(), last_pa_unsafe_));
-
-    if (store_keys == true)
-    {
-        for (TrxHandle::CertKeySet::iterator i(key_list.begin());
-             i != key_list.end();)
-        {
-            KeyEntryOS* const kel(i->first);
-            CertIndex::const_iterator ci(cert_index_.find(kel));
-
-            if (ci == cert_index_.end())
-            {
-                gu_throw_fatal << "could not find key '"
-                               << kel->get_key() << "' from cert index";
-            }
-
-            KeyEntryOS* const ke(*ci);
-            const bool full_key(i->second.first);
-            const bool shared_key(i->second.second);
-            bool keep(false);
-
-            if (shared_key == false)
-            {
-                if ((full_key == false && ke->ref_trx() != trx) ||
-                    (full_key == true  && ke->ref_full_trx() != trx))
-                {
-                    ke->ref(trx, full_key);
-                    keep = true;
-                }
-            }
-            else
-            {
-                if ((full_key == false && ke->ref_shared_trx() != trx) ||
-                    (full_key == true  && ke->ref_full_shared_trx() != trx))
-                {
-                    ke->ref_shared(trx, full_key);
-                    keep = true;
-                }
-            }
-
-            if (keep)
-            {
-                ++i;
-            }
-            else
-            {
-                // this should not happen with Map, but with List is possible
-                i = key_list.erase(i);
-                if (kel != ke) delete kel;
-            }
-
-        }
-
-        if (trx->pa_unsafe()) last_pa_unsafe_ = trx->global_seqno();
-
-        key_count_ += key_count;
-    }
-    cert_debug << "END CERTIFICATION (success): " << *trx;
-    return TEST_OK;
-cert_fail:
-    cert_debug << "END CERTIFICATION (failed): " << *trx;
-    if (store_keys == true)
-    {
-        // Clean up key entries allocated for this trx
-        for (TrxHandle::CertKeySet::iterator i(key_list.begin());
-             i != key_list.end(); ++i)
-        {
-            KeyEntryOS* const kel(i->first);
-
-            // Clean up cert_index_ from entries which were added by this trx
-            CertIndex::iterator ci(cert_index_.find(kel));
-
-            if (ci != cert_index_.end())
-            {
-                KeyEntryOS* ke(*ci);
-
-                if (ke->ref_trx() == 0 && ke->ref_shared_trx() == 0)
-                {
-                    // kel was added to cert_index_ by this trx -
-                    // remove from cert_index_ and fall through to delete
-                    if (ke->get_key().flags() != kel->get_key().flags())
-                    {
-                        // two copies of keys in key list, shared and exclusive,
-                        // skip the one which was not used to create key entry
-                        assert(key_list.find(ke) != key_list.end());
-                        continue;
-                    }
-                    assert(ke->ref_full_trx() == 0);
-                    assert(ke->ref_full_shared_trx() == 0);
-                    assert(kel == ke);
-                    cert_index_.erase(ci);
-                }
-                else if (ke == kel)
-                {
-                    // kel was added and is referenced by another trx - skip it
-                    continue;
-                }
-                // else kel != ke : kel is a duplicate of ke with different
-                //                  flags, fall through to delete
-            }
-            else
-            {
-                assert(0); // we actually should never be here, the key should
-                           // be either added to cert_index_ or be there already
-                log_warn  << "could not find key '"
-                          << kel->get_key() << "' from cert index";
-            }
-
-            assert(kel->ref_trx() == 0);
-            assert(kel->ref_shared_trx() == 0);
-            assert(kel->ref_full_trx() == 0);
-            assert(kel->ref_full_shared_trx() == 0);
-            delete kel;
-        }
-        assert(cert_index_.size() == prev_cert_index_size);
-    }
-
-    return TEST_FAILED;
-}
-
-/* Specifically for chain use in certify_and_depend_v3to4() */
+/* Specifically for chain use in certify_and_depend_v3to5() */
 template <wsrep_key_type_t REF_KEY_TYPE>
 bool
 check_against(const galera::KeyEntryNG*   const found,
               const galera::KeySet::KeyPart&    key,
               wsrep_key_type_t            const key_type,
-              galera::TrxHandle*          const trx,
+              galera::TrxHandleSlave*     const trx,
               bool                        const log_conflict,
               wsrep_seqno_t&                    depends_seqno)
 {
-    const galera::TrxHandle* const ref_trx(found->ref_trx(REF_KEY_TYPE));
+    enum CheckType
+    {
+        CONFLICT,
+        DEPENDENCY,
+        NOTHING
+    };
+
+    static CheckType const check_table
+        [WSREP_KEY_EXCLUSIVE+1][WSREP_KEY_EXCLUSIVE+1] =
+        {
+            //  SH          RE            UP         EX   second / first
+            { NOTHING,    NOTHING,    DEPENDENCY, DEPENDENCY },  // SH
+            { NOTHING,    NOTHING,    DEPENDENCY, CONFLICT   },  // RE
+            { DEPENDENCY, DEPENDENCY, CONFLICT,   CONFLICT   },  // UP
+            { CONFLICT,   CONFLICT,   CONFLICT,   CONFLICT   }   // EX
+        };
+
+    const galera::TrxHandleSlave* const ref_trx(found->ref_trx(REF_KEY_TYPE));
 
     // trx should not have any references in index at this point
     assert(ref_trx != trx);
@@ -497,47 +150,49 @@ check_against(const galera::KeyEntryNG*   const found,
 
     if (gu_likely(0 != ref_trx))
     {
-        if (REF_KEY_TYPE == WSREP_KEY_EXCLUSIVE && ref_trx)
+        if ((REF_KEY_TYPE == WSREP_KEY_EXCLUSIVE ||
+             REF_KEY_TYPE == WSREP_KEY_UPDATE) && ref_trx)
         {
             cert_debug << KeySet::type(REF_KEY_TYPE) << " match: "
-                       << *trx << " <-----> " << *ref_trx;
+                       << *trx << " <---> " << *ref_trx;
         }
 
-        if (REF_KEY_TYPE == WSREP_KEY_SHARED ||
-            REF_KEY_TYPE == WSREP_KEY_SEMI) assert(!ref_trx->is_toi());
+        if (REF_KEY_TYPE == WSREP_KEY_SHARED    ||
+            REF_KEY_TYPE == WSREP_KEY_REFERENCE ||
+            REF_KEY_TYPE == WSREP_KEY_UPDATE) assert(!ref_trx->is_toi());
 
-        // cert conflict takes place if
-        // 1) write sets originated from different nodes, are within cert range
-        // 2) ref_trx is in isolation mode, write sets are within cert range
-        switch(REF_KEY_TYPE)
+        CheckType const check_type(check_table[REF_KEY_TYPE][key_type]);
+
+        switch (check_type)
         {
-        case WSREP_KEY_EXCLUSIVE:
-            conflict = ref_trx->is_toi();
-            /* fall through */
-        case WSREP_KEY_SEMI:
+        case CONFLICT:
+            // cert conflict takes place if
+            // 1) write sets originated from different nodes, are within cert
+            //    range
+            // 2) ref_trx is in isolation mode, write sets are within cert range
+            // 3) Trx has not been certified yet. Already certified trxs show up
+            //    here during index rebuild.
             conflict = (ref_trx->global_seqno() > trx->last_seen_seqno() &&
-                        (conflict || trx->source_id() != ref_trx->source_id()));
+                        (ref_trx->is_toi() ||
+                         trx->source_id() != ref_trx->source_id()) &&
+                        trx->certified() == false);
+
+            if (gu_unlikely(cert_debug_on || (conflict && log_conflict == true)))
+            {
+                log_info << KeySet::type(key_type) << '-'
+                         << KeySet::type(REF_KEY_TYPE)
+                         << " trx " << (conflict ? "conflict" : "match")
+                         << " for key " << key << ": "
+                         << *trx << " <---> " << *ref_trx;
+            }
             /* fall through */
-        case WSREP_KEY_SHARED:;
-        }
-
-        if (gu_unlikely(cert_debug_on || (conflict && log_conflict == true)))
-        {
-            log_info << KeySet::type(key_type) << '-'
-                     << KeySet::type(REF_KEY_TYPE)
-                     << " trx " << (conflict ? "conflict" : "match")
-                     << " for key " << key << ": "
-                     << *trx << " <---> " << *ref_trx;
-        }
-
-        if (conflict)
-        {
-            depends_seqno = -1;
-        }
-        else if (key_type     == WSREP_KEY_EXCLUSIVE ||
-                 REF_KEY_TYPE == WSREP_KEY_EXCLUSIVE)
-        {
-            depends_seqno = std::max(ref_trx->global_seqno(), depends_seqno);
+        case DEPENDENCY:
+            if (conflict)
+                depends_seqno = WSREP_SEQNO_UNDEFINED;
+            else
+                depends_seqno = std::max(ref_trx->global_seqno(), depends_seqno);
+            /* fall through */
+        case NOTHING:;
         }
     }
 
@@ -546,9 +201,9 @@ check_against(const galera::KeyEntryNG*   const found,
 
 /*! for convenience returns true if conflict and false if not */
 static inline bool
-certify_and_depend_v3to4(const galera::KeyEntryNG*   const found,
+certify_and_depend_v3to5(const galera::KeyEntryNG*   const found,
                          const galera::KeySet::KeyPart&    key,
-                         galera::TrxHandle*          const trx,
+                         galera::TrxHandleSlave*     const trx,
                          bool                        const log_conflict)
 {
     wsrep_seqno_t depends_seqno(trx->depends_seqno());
@@ -557,23 +212,27 @@ certify_and_depend_v3to4(const galera::KeyEntryNG*   const found,
     /*
      * The following cascade implements these rules:
      *
-     *      | ex | ss | sh |  <- horizontal axis: trx   key type
-     *   -------------------     vertical   axis: found key type
-     *   ex | C  | C  | C  |
-     *   -------------------     C - conflict
-     *   ss | C  | N  | N  |     D - dependency
-     *   -------------------     N - nothing
-     *   sh | D  | N  | N  |
-     *   -------------------
+     *      | ex | up | re | sh |  <- horizontal axis: trx   key type
+     *   ------------------------     vertical   axis: found key type
+     *   ex | C  | C  | C  | C  |
+     *   ------------------------
+     *   up | C  | C  | D  | D  |
+     *   ------------------------     C - conflict
+     *   re | C  | D  | N  | N  |     D - dependency
+     *   ------------------------     N - nothing
+     *   sh | D  | D  | N  | N  |
+     *   ------------------------
      *
      * Note that depends_seqno is an in/out parameter and is updated on every
      * step.
      */
     if (check_against<WSREP_KEY_EXCLUSIVE>
         (found, key, key_type, trx, log_conflict, depends_seqno) ||
-        (key_type == WSREP_KEY_EXCLUSIVE &&
+        check_against<WSREP_KEY_UPDATE>
+        (found, key, key_type, trx, log_conflict, depends_seqno) ||
+        (key_type >= WSREP_KEY_UPDATE &&
          /* exclusive keys must be checked against shared */
-         (check_against<WSREP_KEY_SEMI>
+         (check_against<WSREP_KEY_REFERENCE>
           (found, key, key_type, trx, log_conflict, depends_seqno) ||
           check_against<WSREP_KEY_SHARED>
           (found, key, key_type, trx, log_conflict, depends_seqno))))
@@ -590,11 +249,11 @@ certify_and_depend_v3to4(const galera::KeyEntryNG*   const found,
 
 /* returns true on collision, false otherwise */
 static bool
-certify_v3to4(galera::Certification::CertIndexNG& cert_index_ng,
+certify_v3to5(galera::Certification::CertIndexNG& cert_index_ng,
               const galera::KeySet::KeyPart&      key,
-              galera::TrxHandle*                  trx,
-              bool const                          store_keys,
-              bool const                          log_conflicts)
+              galera::TrxHandleSlave*     const   trx,
+              bool                        const   store_keys,
+              bool                        const   log_conflicts)
 {
     galera::KeyEntryNG ke(key);
     galera::Certification::CertIndexNG::iterator ci(cert_index_ng.find(&ke));
@@ -618,25 +277,98 @@ certify_v3to4(galera::Certification::CertIndexNG& cert_index_ng,
         // Note: For we skip certification for isolated trxs, only
         // cert index and key_list is populated.
         return (!trx->is_toi() &&
-                certify_and_depend_v3to4(kep, key, trx, log_conflicts));
+                certify_and_depend_v3to5(kep, key, trx, log_conflicts));
+    }
+}
+
+// Add key to trx references for trx that passed certification.
+//
+// @param cert_index certification index in use
+// @param trx        certified transaction
+// @param key_set    key_set used in certification
+// @param key_count  number of keys in key set
+static void do_ref_keys(galera::Certification::CertIndexNG& cert_index,
+                        galera::TrxHandleSlave*       const trx,
+                        const galera::KeySetIn&             key_set,
+                        const long                          key_count)
+{
+    for (long i(0); i < key_count; ++i)
+    {
+        const galera::KeySet::KeyPart& k(key_set.next());
+        galera::KeyEntryNG ke(k);
+        galera::Certification::CertIndexNG::const_iterator
+            ci(cert_index.find(&ke));
+
+        if (ci == cert_index.end())
+        {
+            gu_throw_fatal << "could not find key '" << k
+                           << "' from cert index";
+        }
+        (*ci)->ref(k.wsrep_type(trx->version()), k, trx);
+    }
+}
+
+// Clean up keys from index that were added by trx that failed
+// certification.
+//
+// @param cert_index certification inde
+// @param key_set    key_set used in certification
+// @param processed  number of keys that were processed in certification
+static void do_clean_keys(galera::Certification::CertIndexNG& cert_index,
+                          const galera::TrxHandleSlave* const trx,
+                          const galera::KeySetIn&             key_set,
+                          const long                          processed)
+{
+    /* 'strictly less' comparison is essential in the following loop:
+     * processed key failed cert and was not added to index */
+    for (long i(0); i < processed; ++i)
+    {
+        KeyEntryNG ke(key_set.next());
+
+        // Clean up cert index from entries which were added by this trx
+        galera::Certification::CertIndexNG::iterator ci(cert_index.find(&ke));
+
+        if (gu_likely(ci != cert_index.end()))
+        {
+            galera::KeyEntryNG* kep(*ci);
+
+            if (kep->referenced() == false)
+            {
+                // kel was added to cert_index_ by this trx -
+                // remove from cert_index_ and fall through to delete
+                cert_index.erase(ci);
+            }
+            else continue;
+
+            assert(kep->referenced() == false);
+
+            delete kep;
+        }
+        else if(ke.key().wsrep_type(trx->version()) == WSREP_KEY_SHARED)
+        {
+            assert(0); // we actually should never be here, the key should
+                       // be either added to cert_index_ or be there already
+            log_warn  << "could not find shared key '"
+                      << ke.key() << "' from cert index";
+        }
+        else { /* non-shared keys can duplicate shared in the key set */ }
     }
 }
 
 galera::Certification::TestResult
-galera::Certification::do_test_v3to4(TrxHandle* trx, bool store_keys)
+galera::Certification::do_test_v3to5(TrxHandleSlave* trx, bool store_keys)
 {
     cert_debug << "BEGIN CERTIFICATION v" << trx->version() << ": " << *trx;
 
 #ifndef NDEBUG
-    // to check that cleanup after cert failure returns cert_index_
+    // to check that cleanup after cert failure returns cert_index
     // to original size
-    size_t prev_cert_index_size(cert_index_.size());
+    size_t prev_cert_index_size(cert_index_ng_.size());
 #endif // NDEBUG
 
-    const KeySetIn& key_set(trx->write_set_in().keyset());
+    const KeySetIn& key_set(trx->write_set().keyset());
     long const      key_count(key_set.count());
     long            processed(0);
-
 
     key_set.rewind();
 
@@ -644,7 +376,7 @@ galera::Certification::do_test_v3to4(TrxHandle* trx, bool store_keys)
     {
         const KeySet::KeyPart& key(key_set.next());
 
-        if (certify_v3to4(cert_index_ng_, key, trx, store_keys, log_conflicts_))
+        if (certify_v3to5(cert_index_ng_, key, trx, store_keys, log_conflicts_))
         {
             goto cert_fail;
         }
@@ -655,25 +387,8 @@ galera::Certification::do_test_v3to4(TrxHandle* trx, bool store_keys)
     if (store_keys == true)
     {
         assert (key_count == processed);
-
         key_set.rewind();
-        for (long i(0); i < key_count; ++i)
-        {
-            const KeySet::KeyPart& k(key_set.next());
-            KeyEntryNG ke(k);
-            CertIndexNG::const_iterator ci(cert_index_ng_.find(&ke));
-
-            if (ci == cert_index_ng_.end())
-            {
-                gu_throw_fatal << "could not find key '" << k
-                               << "' from cert index";
-            }
-
-            KeyEntryNG* const kep(*ci);
-
-            kep->ref(k.wsrep_type(trx->version()), k, trx);
-
-        }
+        do_ref_keys(cert_index_ng_, trx, key_set, key_count);
 
         if (trx->pa_unsafe()) last_pa_unsafe_ = trx->global_seqno();
 
@@ -692,43 +407,8 @@ cert_fail:
     {
         /* Clean up key entries allocated for this trx */
         key_set.rewind();
-
-        /* 'strictly less' comparison is essential in the following loop:
-         * processed key failed cert and was not added to index */
-        for (long i(0); i < processed; ++i)
-        {
-            KeyEntryNG ke(key_set.next());
-
-            // Clean up cert_index_ from entries which were added by this trx
-            CertIndexNG::iterator ci(cert_index_ng_.find(&ke));
-
-            if (gu_likely(ci != cert_index_ng_.end()))
-            {
-                KeyEntryNG* kep(*ci);
-
-                if (kep->referenced() == false)
-                {
-                    // kel was added to cert_index_ by this trx -
-                    // remove from cert_index_ and fall through to delete
-                    cert_index_ng_.erase(ci);
-                }
-                else continue;
-
-                assert(kep->referenced() == false);
-
-                delete kep;
-
-            }
-            else if(ke.key().wsrep_type(trx->version()) == WSREP_KEY_SHARED)
-            {
-                assert(0); // we actually should never be here, the key should
-                           // be either added to cert_index_ or be there already
-                log_warn  << "could not find shared key '"
-                          << ke.key() << "' from cert index";
-            }
-            else { /* non-shared keys can duplicate shared in the key set */ }
-        }
-        assert(cert_index_.size() == prev_cert_index_size);
+        do_clean_keys(cert_index_ng_, trx, key_set, processed);
+        assert(cert_index_ng_.size() == prev_cert_index_size);
     }
 
     return TEST_FAILED;
@@ -753,7 +433,7 @@ trx_cert_version_match(int const trx_version, int const cert_version)
 }
 
 galera::Certification::TestResult
-galera::Certification::do_test(TrxHandle* trx, bool store_keys)
+galera::Certification::do_test(const TrxHandleSlavePtr& trx, bool store_keys)
 {
     assert(trx->source_id() != WSREP_UUID_UNDEFINED);
 
@@ -766,21 +446,12 @@ galera::Certification::do_test(TrxHandle* trx, bool store_keys)
         return TEST_FAILED;
     }
 
-    if (gu_unlikely(trx->last_seen_seqno() < initial_position_ ||
-                    trx->global_seqno() - trx->last_seen_seqno() > max_length_))
+    // trx->is_certified() == true during index rebuild from IST, do_test()
+    // must not fail, just populate index
+    if (gu_unlikely(trx->certified() == false &&
+                    (trx->last_seen_seqno() < initial_position_ ||
+                     trx->global_seqno()-trx->last_seen_seqno() > max_length_)))
     {
-        if (trx->last_seen_seqno() < initial_position_)
-        {
-            if (cert_index_.empty() == false)
-            {
-                log_warn << "last seen seqno below limit for trx " << *trx;
-            }
-            else
-            {
-                log_debug << "last seen seqno below limit for trx " << *trx;
-            }
-        }
-
         if (trx->global_seqno() - trx->last_seen_seqno() > max_length_)
         {
             log_warn << "certification interval for trx " << *trx
@@ -795,35 +466,36 @@ galera::Certification::do_test(TrxHandle* trx, bool store_keys)
     gu::Lock lock(mutex_); // why do we need that? - e.g. set_trx_committed()
 
     /* initialize parent seqno */
-    if ((trx->flags() & (TrxHandle::F_ISOLATION | TrxHandle::F_PA_UNSAFE))
-        || trx_map_.empty())
+    if (gu_unlikely(trx_map_.empty()))
     {
         trx->set_depends_seqno(trx->global_seqno() - 1);
     }
     else
     {
-        trx->set_depends_seqno(
-            trx_map_.begin()->second->global_seqno() - 1);
-
         if (optimistic_pa_ == false &&
             trx->last_seen_seqno() > trx->depends_seqno())
             trx->set_depends_seqno(trx->last_seen_seqno());
+
+        wsrep_seqno_t const ds(trx_map_.begin()->first - 1);
+        if (ds > trx->depends_seqno()) trx->set_depends_seqno(ds);
     }
 
     switch (version_)
     {
     case 1:
     case 2:
-        res = do_test_v1to2(trx, store_keys);
         break;
     case 3:
     case 4:
-        res = do_test_v3to4(trx, store_keys);
+    case 5:
+        res = do_test_v3to5(trx.get(), store_keys);
         break;
     default:
         gu_throw_fatal << "certification test for version "
                        << version_ << " not implemented";
     }
+
+    assert(TEST_FAILED == res || trx->depends_seqno() >= 0);
 
     if (store_keys == true && res == TEST_OK)
     {
@@ -832,7 +504,14 @@ galera::Certification::do_test(TrxHandle* trx, bool store_keys)
         ++n_certified_;
         deps_dist_ += (trx->global_seqno() - trx->depends_seqno());
         cert_interval_ += (trx->global_seqno() - trx->last_seen_seqno() - 1);
-        index_size_ = (cert_index_.size() + cert_index_ng_.size());
+        index_size_ = cert_index_ng_.size();
+    }
+
+    // Additional NBO certification.
+    if (trx->flags() & TrxHandle::F_ISOLATION)
+    {
+        res = do_test_nbo(trx);
+        assert(TEST_FAILED == res || trx->depends_seqno() >= 0);
     }
 
     byte_count_ += trx->size();
@@ -842,13 +521,13 @@ galera::Certification::do_test(TrxHandle* trx, bool store_keys)
 
 
 galera::Certification::TestResult
-galera::Certification::do_test_preordered(TrxHandle* trx)
+galera::Certification::do_test_preordered(TrxHandleSlave* trx)
 {
     /* Source ID is not always available for preordered events (e.g. event
      * producer didn't provide any) so for now we must accept undefined IDs. */
     //assert(trx->source_id() != WSREP_UUID_UNDEFINED);
 
-    assert(trx->new_version());
+    assert(trx->version() >= 3);
     assert(trx->preordered());
 
     /* we don't want to go any further unless the writeset checksum is ok */
@@ -870,9 +549,10 @@ galera::Certification::do_test_preordered(TrxHandle* trx)
         assert(0);
     }
 
-    trx->set_depends_seqno(last_preordered_seqno_ -
-                           trx->write_set_in().pa_range() + 1);
+    trx->set_depends_seqno(last_preordered_seqno_ + 1 -
+                           trx->write_set().pa_range());
     // +1 compensates for subtracting from a previous seqno, rather than own.
+    trx->mark_certified();
 
     last_preordered_seqno_ = trx->global_seqno();
     last_preordered_id_    = trx->trx_id();
@@ -881,19 +561,395 @@ galera::Certification::do_test_preordered(TrxHandle* trx)
 }
 
 
-galera::Certification::Certification(gu::Config& conf, ServiceThd& thd)
+//
+// non-blocking operations
+//
+
+// Prepare a copy of TrxHandleSlave with private storage
+galera::NBOEntry copy_ts(
+    galera::TrxHandleSlave* ts,
+    galera::TrxHandleSlave::Pool& pool,
+    gu::shared_ptr<NBOCtx>::type nbo_ctx)
+{
+    // FIXME: Pass proper working directory from config to MappedBuffer ctor
+    gu::shared_ptr<galera::MappedBuffer>::type buf(
+        new galera::MappedBuffer("/tmp"));
+    assert(ts->action().first && ts->action().second);
+    if (ts->action().first == 0)
+    {
+        gu_throw_fatal
+            << "Unassigned action pointer for transaction, cannot make a copy of: "
+            << *ts;
+    }
+
+    buf->resize(ts->action().second);
+    std::copy(static_cast<const gu::byte_t*>(ts->action().first),
+              static_cast<const gu::byte_t*>(ts->action().first)
+              + ts->action().second,
+              buf->begin());
+
+    galera::TrxHandleSlaveDeleter d;
+    gu::shared_ptr<galera::TrxHandleSlave>::type new_ts(
+        galera::TrxHandleSlave::New(ts->local(), pool), d);
+    if (buf->size() > size_t(std::numeric_limits<int32_t>::max()))
+        gu_throw_error(ERANGE) << "Buffer size " << buf->size()
+                               << " out of range";
+    gcs_action act = {ts->global_seqno(), ts->local_seqno(),
+                      &(*buf)[0], static_cast<int32_t>(buf->size()),
+                      GCS_ACT_WRITESET};
+    if (ts->certified() == false)
+    {
+        // TrxHandleSlave is from group
+        gu_trace(new_ts->unserialize<true>(act));
+    }
+    else
+    {
+        // TrxHandleSlave is from IST
+        gu_trace(new_ts->unserialize<false>(act));
+    }
+    new_ts->set_local(ts->local());
+    return galera::NBOEntry(new_ts, buf, nbo_ctx);
+}
+
+
+static void purge_key_set_nbo(galera::Certification::CertIndexNBO& cert_index,
+                              bool                                 is_nbo_index,
+                              galera::TrxHandleSlave*              ts,
+                              const galera::KeySetIn&              key_set,
+                              const long                           count)
+{
+    using galera::Certification;
+    using galera::KeyEntryNG;
+    using galera::KeySet;
+
+    key_set.rewind();
+
+    for (long i(0); i < count; ++i)
+    {
+        KeyEntryNG ke(key_set.next());
+        std::pair<Certification::CertIndexNBO::iterator,
+                  Certification::CertIndexNBO::iterator>
+            ci_range(cert_index.equal_range(&ke));
+
+        assert(std::distance(ci_range.first, ci_range.second) >= 1);
+
+        wsrep_key_type_t const p(ke.key().wsrep_type(ts->version()));
+        Certification::CertIndexNBO::iterator ci;
+        for (ci = ci_range.first; ci != ci_range.second; ++ci)
+        {
+            if ((*ci)->ref_trx(p) == ts) break;
+        }
+        assert(ci != ci_range.second);
+        if (ci == ci_range.second)
+        {
+            log_warn << "purge_key_set_nbo(): Could not find key "
+                     << ke.key() << " from NBO index, skipping";
+            continue;
+        }
+
+        KeyEntryNG* const kep(*ci);
+        assert(kep->referenced() == true);
+
+        kep->unref(p, ts);
+        assert(kep->referenced() == false);
+        cert_index.erase(ci);
+        delete kep;
+    }
+}
+
+
+static void end_nbo(galera::NBOMap::iterator             i,
+                    galera::TrxHandleSlavePtr            ts,
+                    galera::Certification::CertIndexNBO& nbo_index,
+                    galera::NBOMap&                      nbo_map)
+{
+    NBOEntry& e(i->second);
+
+    log_debug << "Ending NBO started by " << *e.ts_ptr();
+
+    // Erase entry from index
+    const KeySetIn& key_set(e.ts_ptr()->write_set().keyset());
+    purge_key_set_nbo(nbo_index, true, e.ts_ptr(), key_set, key_set.count());
+
+    ts->set_ends_nbo(e.ts_ptr()->global_seqno());
+
+    nbo_map.erase(i);
+}
+
+
+gu::shared_ptr<NBOCtx>::type galera::Certification::nbo_ctx_unlocked(
+    wsrep_seqno_t const seqno)
+{
+    // This will either
+    // * Insert a new NBOCtx shared_ptr into ctx map if one didn't exist
+    //   before, or
+    // * Return existing entry, while newly created shared ptr gets freed
+    //   automatically when it goes out of scope
+    return nbo_ctx_map_.insert(
+        std::make_pair(seqno,
+                       gu::make_shared<NBOCtx>())).first->second;
+}
+
+gu::shared_ptr<NBOCtx>::type galera::Certification::nbo_ctx(
+    wsrep_seqno_t const seqno)
+{
+    assert(seqno > 0);
+    gu::Lock lock(mutex_);
+    return nbo_ctx_unlocked(seqno);
+}
+
+void galera::Certification::erase_nbo_ctx(wsrep_seqno_t const seqno)
+{
+    assert(seqno > 0);
+    gu::Lock lock(mutex_);
+
+    size_t n_erased(nbo_ctx_map_.erase(seqno));
+    assert(n_erased == 1); (void)n_erased;
+}
+
+
+static bool is_exclusive(const galera::KeyEntryNG* ke)
+{
+    assert(ke != 0);
+    assert((ke->ref_trx(WSREP_KEY_SHARED) ||
+            ke->ref_trx(WSREP_KEY_REFERENCE) ||
+            ke->ref_trx(WSREP_KEY_UPDATE) ||
+            ke->ref_trx(WSREP_KEY_EXCLUSIVE)) &&
+           !(ke->ref_trx(WSREP_KEY_SHARED) &&
+             ke->ref_trx(WSREP_KEY_REFERENCE) &&
+             ke->ref_trx(WSREP_KEY_UPDATE) &&
+             ke->ref_trx(WSREP_KEY_EXCLUSIVE)));
+    return (ke->ref_trx(WSREP_KEY_EXCLUSIVE) != 0 ||
+            ke->ref_trx(WSREP_KEY_UPDATE) != 0);
+}
+
+static bool
+certify_nbo(galera::Certification::CertIndexNBO& cert_index,
+            const galera::KeySet::KeyPart&       key,
+            galera::TrxHandleSlave* const        trx,
+            bool                    const        log_conflicts)
+{
+    using galera::KeyEntryNG;
+    using galera::Certification;
+    using galera::TrxHandleSlave;
+
+    KeyEntryNG ke(key);
+    std::pair<Certification::CertIndexNBO::iterator,
+              Certification::CertIndexNBO::iterator>
+        it(cert_index.equal_range(&ke));
+
+    // Certification is done over whole index as opposed to regular
+    // write set certification where only given range is used
+
+    // If found range is non-empty, it must be either single exclusive
+    // key or all shared.
+    assert(std::count_if(it.first, it.second, is_exclusive) == 0 ||
+           std::distance(it.first, it.second) == 1);
+
+    Certification::CertIndexNBO::iterator i;
+    if ((i = std::find_if(it.first, it.second, is_exclusive)) != cert_index.end())
+    {
+        if (gu_unlikely(log_conflicts == true))
+        {
+            const TrxHandleSlave* ref_trx((*i)->ref_trx(WSREP_KEY_EXCLUSIVE));
+            assert(ref_trx != 0);
+            log_info << "NBO conflict for key " << key << ": "
+                     << *trx << " <--X--> " << *ref_trx;
+        }
+        return true;
+    }
+    return false;
+}
+
+static void
+do_ref_keys_nbo(galera::Certification::CertIndexNBO& index,
+                TrxHandleSlave*                const trx,
+                const galera::KeySetIn&              key_set,
+                const long                           key_count)
+{
+    using galera::KeySet;
+    using galera::KeyEntryNG;
+    using galera::Certification;
+
+    key_set.rewind();
+
+    for (long i(0); i < key_count; ++i)
+    {
+        const KeySet::KeyPart& key(key_set.next());
+        wsrep_key_type_t const type(key.wsrep_type(trx->version()));
+        KeyEntryNG* kep (new KeyEntryNG(key));
+        Certification::CertIndexNBO::iterator it;
+        assert((it = index.find(kep)) == index.end() ||
+               (*it)->ref_trx(type) != trx);
+        it = index.insert(kep);
+        (*it)->ref(type, key, trx);
+    }
+}
+
+
+galera::Certification::TestResult galera::Certification::do_test_nbo(
+    const TrxHandleSlavePtr& ts)
+{
+    assert(!ts->is_dummy());
+    assert(ts->flags() & TrxHandle::F_ISOLATION);
+    assert(ts->flags() & (TrxHandle::F_BEGIN | TrxHandle::F_COMMIT));
+
+    if (nbo_position_ >= ts->global_seqno())
+    {
+        // This is part of cert index preload, needs to be dropped since
+        // it is already processed by this node before partitioning.
+        assert(ts->certified() == true);
+        // Return TEST_OK. If the trx is in index preload, it has
+        // passed certification on donor.
+        log_debug << "Dropping NBO " << *ts;
+        return TEST_OK;
+    }
+    nbo_position_ = ts->global_seqno();
+
+#ifndef NDEBUG
+    size_t prev_nbo_index_size(nbo_index_.size());
+#endif // NDEBUG
+
+    bool ineffective(false);
+
+    galera::Certification::TestResult ret(TEST_OK);
+    if ((ts->flags() & TrxHandle::F_BEGIN) &&
+        (ts->flags() & TrxHandle::F_COMMIT))
+    {
+        // Old school atomic TOI
+        log_debug << "TOI: " << *ts;
+        const KeySetIn& key_set(ts->write_set().keyset());
+        long const      key_count(key_set.count());
+        long            processed(0);
+
+        key_set.rewind();
+        for (; processed < key_count; ++processed)
+        {
+            const KeySet::KeyPart& key(key_set.next());
+            if (certify_nbo(nbo_index_, key, ts.get(), log_conflicts_))
+            {
+                ret = TEST_FAILED;
+                break;
+            }
+        }
+        log_debug << "NBO test result " << ret << " for TOI " << *ts;
+        // Atomic TOI should not cause change in NBO index
+        assert(prev_nbo_index_size == nbo_index_.size());
+    }
+    else if (ts->flags() & TrxHandle::F_BEGIN)
+    {
+        // Beginning of non-blocking operation
+        log_debug << "NBO start: " << *ts;
+        // We need a copy of ts since the lifetime of NBO may exceed
+        // the lifetime of the buffer in GCache
+        NBOEntry entry(copy_ts(ts.get(), nbo_pool_, nbo_ctx_unlocked(
+                                   ts->global_seqno())));
+
+        TrxHandleSlave* new_ts(entry.ts_ptr());
+        const KeySetIn& key_set(new_ts->write_set().keyset());
+        long const      key_count(key_set.count());
+        long            processed(0);
+
+        key_set.rewind();
+        for (; processed < key_count; ++processed)
+        {
+            const KeySet::KeyPart& key(key_set.next());
+            if (certify_nbo(nbo_index_, key, new_ts, log_conflicts_))
+            {
+                ret = TEST_FAILED;
+                break;
+            }
+        }
+
+        switch (ret)
+        {
+        case TEST_OK:
+            do_ref_keys_nbo(nbo_index_, new_ts, key_set, key_count);
+            nbo_map_.insert(std::make_pair(new_ts->global_seqno(),
+                                           entry));
+            break;
+        case TEST_FAILED:
+            // Clean keys not needed here since certify_nbo()
+            // does not insert them into nbo_index_
+            break;
+        }
+    }
+    else
+    {
+        assert(ts->nbo_end());
+        // End of non-blocking operation
+        log_debug << "NBO end: " << *ts;
+        ineffective = true;
+
+        NBOKey key;
+        const DataSetIn& ws(ts->write_set().dataset());
+        ws.rewind();
+        assert(ws.count() == 1);
+        if (ws.count() != 1) gu_throw_fatal << "Invalid dataset count in "
+                                            << *ts;
+        gu::Buf buf(ws.next());
+        key.unserialize(static_cast<const gu::byte_t*>(buf.ptr), buf.size, 0);
+
+        NBOMap::iterator i(nbo_map_.find(key));
+        if (i != nbo_map_.end())
+        {
+            NBOEntry& e(i->second);
+            e.add_ended(ts->source_id());
+            if (ts->local() == true)
+            {
+                // Clear NBO context aborted flag if it is set by
+                // intermediate view change.
+                e.nbo_ctx()->set_aborted(false);
+            }
+
+            if (current_view_.subset_of(e.ended_set()))
+            {
+                // All nodes of the current primary view have
+                // ended the operation.
+                end_nbo(i, ts, nbo_index_, nbo_map_);
+                ineffective = false;
+            }
+        }
+        else
+        {
+            log_warn << "no corresponding NBO begin found for NBO end " << *ts;
+        }
+    }
+
+    if (gu_likely(TEST_OK == ret))
+    {
+        ts->set_depends_seqno(ts->global_seqno() - 1);
+        if (gu_unlikely(ineffective))
+        {
+            assert(ts->nbo_end());
+            assert(ts->ends_nbo() == WSREP_SEQNO_UNDEFINED);
+            ret = TEST_FAILED;
+        }
+    }
+
+    assert(TEST_FAILED == ret || ts->depends_seqno() >= 0);
+
+    return ret;
+}
+
+galera::Certification::Certification(gu::Config& conf, ServiceThd* thd)
     :
     version_               (-1),
     conf_                  (conf),
     trx_map_               (),
-    cert_index_            (),
     cert_index_ng_         (),
+    nbo_map_               (),
+    nbo_ctx_map_           (),
+    nbo_index_             (),
+    nbo_pool_              (sizeof(TrxHandleSlave)),
     deps_set_              (),
+    current_view_          (),
     service_thd_           (thd),
     mutex_                 (),
     trx_size_warn_count_   (0),
     initial_position_      (-1),
     position_              (-1),
+    nbo_position_          (-1),
     safe_to_discard_seqno_ (-1),
     last_pa_unsafe_        (-1),
     last_preordered_seqno_ (position_),
@@ -909,6 +965,7 @@ galera::Certification::Certification(gu::Config& conf, ServiceThd& thd)
 
     max_length_            (max_length(conf)),
     max_length_check_      (length_check(conf)),
+    inconsistent_          (false),
     log_conflicts_         (conf.get<bool>(CERT_PARAM_LOG_CONFLICTS)),
     optimistic_pa_         (conf.get<bool>(CERT_PARAM_OPTIMISTIC_PA))
 {}
@@ -916,7 +973,7 @@ galera::Certification::Certification(gu::Config& conf, ServiceThd& thd)
 
 galera::Certification::~Certification()
 {
-    log_info << "cert index usage at exit "   << cert_index_.size();
+    log_info << "cert index usage at exit "   << cert_index_ng_.size();
     log_info << "cert trx map usage at exit " << trx_map_.size();
     log_info << "deps set usage at exit "     << deps_set_.size();
 
@@ -931,14 +988,20 @@ galera::Certification::~Certification()
     gu::Lock lock(mutex_);
 
     for_each(trx_map_.begin(), trx_map_.end(), PurgeAndDiscard(*this));
-    service_thd_.release_seqno(position_);
-    service_thd_.flush();
+    trx_map_.clear();
+    nbo_map_.clear();
+    if (service_thd_)
+    {
+        service_thd_->release_seqno(position_);
+        service_thd_->flush(gu::UUID());
+    }
 }
 
 
-void galera::Certification::assign_initial_position(wsrep_seqno_t seqno,
-                                                    int           version)
+void galera::Certification::assign_initial_position(const gu::GTID& gtid,
+                                                    int const       version)
 {
+    assert(gtid.seqno() >= 0 || gtid == gu::GTID());
     switch (version)
     {
         // value -1 used in initialization when trx protocol version is not
@@ -948,37 +1011,45 @@ void galera::Certification::assign_initial_position(wsrep_seqno_t seqno,
     case 2:
     case 3:
     case 4:
+    case 5:
         break;
     default:
         gu_throw_fatal << "certification/trx version "
                        << version << " not supported";
     }
 
+    wsrep_seqno_t const seqno(gtid.seqno());
     gu::Lock lock(mutex_);
+
+    std::for_each(trx_map_.begin(), trx_map_.end(), PurgeAndDiscard(*this));
 
     if (seqno >= position_)
     {
-        std::for_each(trx_map_.begin(), trx_map_.end(), PurgeAndDiscard(*this));
-        assert(cert_index_.size() == 0);
         assert(cert_index_ng_.size() == 0);
     }
     else
     {
-        log_warn << "moving position backwards: " << position_ << " -> "
-                 << seqno;
-        std::for_each(cert_index_.begin(), cert_index_.end(),
-                      gu::DeleteObject());
+        if (seqno > 0) // don't warn on index reset.
+        {
+            log_warn << "moving position backwards: " << position_ << " -> "
+                     << seqno;
+        }
+
         std::for_each(cert_index_ng_.begin(), cert_index_ng_.end(),
                       gu::DeleteObject());
-        std::for_each(trx_map_.begin(), trx_map_.end(),
-                      Unref2nd<TrxMap::value_type>());
-        cert_index_.clear();
         cert_index_ng_.clear();
     }
 
     trx_map_.clear();
+    assert(cert_index_ng_.empty());
 
-    log_info << "Assign initial position for certification: " << seqno
+    if (service_thd_)
+    {
+        service_thd_->release_seqno(position_);
+        service_thd_->flush(gtid.uuid());
+    }
+
+    log_info << "####### Assign initial position for certification: " << gtid
              << ", protocol version: " << version;
 
     initial_position_      = seqno;
@@ -991,20 +1062,74 @@ void galera::Certification::assign_initial_position(wsrep_seqno_t seqno,
 }
 
 
-galera::Certification::TestResult
-galera::Certification::test(TrxHandle* trx, bool bval)
+void
+galera::Certification::adjust_position(const View&         view,
+                                       const gu::GTID&     gtid,
+                                       int           const version)
 {
-    assert(trx->global_seqno() >= 0 && trx->local_seqno() >= 0);
+    assert(gtid.uuid()  != GU_UUID_NIL);
+    assert(gtid.seqno() >= 0);
+
+    gu::Lock lock(mutex_);
+
+// this assert is too strong: local ordered transactions may get canceled without
+// entering certification    assert(position_ + 1 == seqno || 0 == position_);
+
+    log_info << "####### Adjusting cert position: "
+             << position_ << " -> " << gtid.seqno();
+
+    if (version != version_)
+    {
+        std::for_each(trx_map_.begin(), trx_map_.end(), PurgeAndDiscard(*this));
+        assert(trx_map_.empty() || trx_map_.rbegin()->first + 1 == position_);
+        trx_map_.clear();
+        assert(cert_index_ng_.empty());
+        if (service_thd_)
+        {
+            service_thd_->release_seqno(position_);
+        }
+    }
+
+    if (service_thd_)
+    {
+        service_thd_->flush(gtid.uuid());
+    }
+
+    position_       = gtid.seqno();
+    last_pa_unsafe_ = position_;
+    version_        = version;
+    current_view_   = view;
+
+    // Loop over NBO entries, clear state and abort waiters. NBO end waiters
+    // must resend end messages.
+    for (NBOMap::iterator i(nbo_map_.begin()); i != nbo_map_.end(); ++i)
+    {
+        NBOEntry& e(i->second);
+        e.clear_ended();
+        e.nbo_ctx()->set_aborted(true);
+    }
+}
+
+wsrep_seqno_t
+galera::Certification::increment_position()
+{
+    gu::Lock lock(mutex_);
+    position_++;
+    return position_;
+}
+
+galera::Certification::TestResult
+galera::Certification::test(const TrxHandleSlavePtr& trx, bool store_keys)
+{
+    assert(trx->global_seqno() >= 0 /* && trx->local_seqno() >= 0 */);
 
     const TestResult ret
-        (trx->preordered() ? do_test_preordered(trx) : do_test(trx, bval));
+        (trx->preordered() ?
+         do_test_preordered(trx.get()) : do_test(trx, store_keys));
 
-    if (gu_unlikely(ret != TEST_OK))
-    {
-        // make sure that last depends seqno is -1 for trxs that failed
-        // certification
-        trx->set_depends_seqno(WSREP_SEQNO_UNDEFINED);
-    }
+    assert(TEST_FAILED == ret || trx->depends_seqno() >= 0);
+
+    if (gu_unlikely(ret != TEST_OK)) { trx->mark_dummy(__LINE__); }
 
     return ret;
 }
@@ -1038,7 +1163,7 @@ galera::Certification::purge_trxs_upto_(wsrep_seqno_t const seqno,
     for_each(trx_map_.begin(), purge_bound, PurgeAndDiscard(*this));
     trx_map_.erase(trx_map_.begin(), purge_bound);
 
-    if (handle_gcache) service_thd_.release_seqno(seqno);
+    if (handle_gcache && service_thd_) service_thd_->release_seqno(seqno);
 
     if (0 == ((trx_map_.size() + 1) % 10000))
     {
@@ -1052,12 +1177,16 @@ galera::Certification::purge_trxs_upto_(wsrep_seqno_t const seqno,
 
 
 galera::Certification::TestResult
-galera::Certification::append_trx(TrxHandle* trx)
+galera::Certification::append_trx(const TrxHandleSlavePtr& trx)
 {
-    assert(trx->global_seqno() >= 0 && trx->local_seqno() >= 0);
+// explicit ROLLBACK is dummy()    assert(!trx->is_dummy());
+    assert(trx->global_seqno() >= 0 /* && trx->local_seqno() >= 0 */);
     assert(trx->global_seqno() > position_);
 
-    trx->ref();
+#ifndef NDEBUG
+    bool const explicit_rollback(trx->explicit_rollback());
+#endif /* NDEBUG */
+
     {
         gu::Lock lock(mutex_);
 
@@ -1103,38 +1232,59 @@ galera::Certification::append_trx(TrxHandle* trx)
         }
     }
 
-    const TestResult retval(test(trx));
+    const TestResult retval(test(trx, true));
 
     {
-        gu::Lock lock(mutex_);
+        assert(trx->global_seqno() > 0);
 
+        gu::Lock lock(mutex_);
         if (trx_map_.insert(
                 std::make_pair(trx->global_seqno(), trx)).second == false)
             gu_throw_fatal << "duplicate trx entry " << *trx;
 
-        deps_set_.insert(trx->last_seen_seqno());
-        assert(deps_set_.size() <= trx_map_.size());
+        // trx with local seqno WSREP_SEQNO_UNDEFINED originates from
+        // IST so deps set tracking should not be done
+        if (trx->local_seqno() != WSREP_SEQNO_UNDEFINED)
+        {
+            assert(trx->last_seen_seqno() != WSREP_SEQNO_UNDEFINED);
+            deps_set_.insert(trx->last_seen_seqno());
+            assert(deps_set_.size() <= trx_map_.size());
+        }
     }
 
-    trx->mark_certified();
+    if (!trx->certified()) trx->mark_certified();
+
+#ifndef NDEBUG
+    if (explicit_rollback)
+    {
+        assert(trx->explicit_rollback());
+        assert(retval == TEST_OK);
+        assert(trx->state() == TrxHandle::S_CERTIFYING);
+    }
+#endif /* NDEBUG */
 
     return retval;
 }
 
 
-wsrep_seqno_t galera::Certification::set_trx_committed(TrxHandle* trx)
+wsrep_seqno_t galera::Certification::set_trx_committed(TrxHandleSlave& trx)
 {
-    assert(trx->global_seqno() >= 0 && trx->local_seqno() >= 0 &&
-           trx->is_committed() == false);
+    assert(trx.global_seqno() >= 0);
+    assert(trx.is_committed() == false);
 
-    wsrep_seqno_t ret(-1);
+    wsrep_seqno_t ret(WSREP_SEQNO_UNDEFINED);
     {
         gu::Lock lock(mutex_);
-        if (trx->is_certified() == true)
+
+        // certified trx with local seqno WSREP_SEQNO_UNDEFINED originates from
+        // IST so deps set tracking should not be done
+        // Local explicit rollback events bypassed certificaiton
+        if (trx.certified()   == true &&
+            trx.local_seqno() != WSREP_SEQNO_UNDEFINED &&
+            !trx.cert_bypass())
         {
-            // trxs with depends_seqno == -1 haven't gone through
-            // append_trx
-            DepsSet::iterator i(deps_set_.find(trx->last_seen_seqno()));
+            assert(trx.last_seen_seqno() != WSREP_SEQNO_UNDEFINED);
+            DepsSet::iterator i(deps_set_.find(trx.last_seen_seqno()));
             assert(i != deps_set_.end());
 
             if (deps_set_.size() == 1) safe_to_discard_seqno_ = *i;
@@ -1148,22 +1298,9 @@ wsrep_seqno_t galera::Certification::set_trx_committed(TrxHandle* trx)
         }
     }
 
-    trx->mark_committed();
-    trx->clear();
+    trx.mark_committed();
 
     return ret;
-}
-
-galera::TrxHandle* galera::Certification::get_trx(wsrep_seqno_t seqno)
-{
-    gu::Lock lock(mutex_);
-    TrxMap::iterator i(trx_map_.find(seqno));
-
-    if (i == trx_map_.end()) return 0;
-
-    i->second->ref();
-
-    return i->second;
 }
 
 void
@@ -1209,4 +1346,12 @@ galera::Certification::param_set(const std::string& key,
     }
 
     conf_.set(key, value);
+}
+
+void
+galera::Certification::mark_inconsistent()
+{
+    gu::Lock lock(mutex_);
+    assert(!inconsistent_);
+    inconsistent_ = true;
 }

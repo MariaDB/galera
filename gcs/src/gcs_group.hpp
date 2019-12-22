@@ -18,6 +18,13 @@
 #include "gcs_recv_msg.hpp"
 #include "gcs_seqno.hpp"
 #include "gcs_state_msg.hpp"
+#include "gu_unordered.hpp"
+
+#include "gu_config.hpp"
+
+extern std::string const GCS_VOTE_POLICY_KEY;
+extern void gcs_group_register(gu::Config* cnf); // register parameters
+extern uint8_t gcs_group_conf_to_vote_policy(gu::Config& cnf);
 
 #include "gu_status.hpp"
 #include "gu_utils.hpp"
@@ -34,9 +41,14 @@ gcs_group_state_t;
 
 extern const char* gcs_group_state_str[];
 
+typedef gu::UnorderedMap<gu::GTID, int64_t, gu::GTID::TableHash> VoteHistory;
+
+struct VoteResult { gcs_seqno_t seqno; int64_t res; };
+
 typedef struct gcs_group
 {
     gcache_t*     cache;
+    gu::Config*   cnf;
     gcs_seqno_t   act_id_;      // current(last) action seqno
     gcs_seqno_t   conf_id;      // current configuration seqno
     gu_uuid_t     state_uuid;   // state exchange id
@@ -47,7 +59,11 @@ typedef struct gcs_group
     const char*   my_address;
     gcs_group_state_t state;    // group state: PRIMARY | NON_PRIMARY
     gcs_seqno_t   last_applied; // last_applied action group-wide
-    long          last_node;    // node that reported last_applied
+    long          last_node;    // node that last reported commit_cut
+    gcs_seqno_t   vote_request_seqno; // last vote request was passed for it
+    VoteResult    vote_result;  // last vote result
+    VoteHistory*  vote_history; // history of group votes
+    uint8_t       vote_policy;
     bool          frag_reset;   // indicate that fragmentation was reset
     gcs_node_t*   nodes;        // array of node contexts
 
@@ -69,7 +85,6 @@ typedef struct gcs_group
     int last_applied_proto_ver;
 
     gcs_group() : gcs_proto_ver(0), repl_proto_ver(0), appl_proto_ver(0) { }
-
 }
 gcs_group_t;
 
@@ -78,6 +93,7 @@ gcs_group_t;
  */
 extern int
 gcs_group_init (gcs_group_t* group,
+                gu::Config*  cnf,
                 gcache_t*    cache,
                 const char*  node_name, ///< can be null
                 const char*  inc_addr,  ///< can be null
@@ -89,9 +105,8 @@ gcs_group_init (gcs_group_t* group,
  * Initialize group action history parameters. See gcs.h
  */
 extern int
-gcs_group_init_history (gcs_group_t*     group,
-                        gcs_seqno_t      seqno,
-                        const gu_uuid_t* uuid);
+gcs_group_init_history (gcs_group_t*    group,
+                        const gu::GTID& position);
 
 /*!
  * Free group resources
@@ -122,6 +137,9 @@ gcs_group_handle_state_msg (gcs_group_t* group, const gcs_recv_msg_t* msg);
 
 extern gcs_seqno_t
 gcs_group_handle_last_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg);
+
+extern VoteResult
+gcs_group_handle_vote_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg);
 
 /*! @return 0 for success, 1 for (success && i_am_sender)
  * or negative error code */
@@ -172,7 +190,7 @@ gcs_group_handle_act_msg (gcs_group_t*          const group,
 
         rcvd->act.type = frg->act_type;
 
-        if (gu_likely(GCS_ACT_TORDERED  == rcvd->act.type &&
+        if (gu_likely(GCS_ACT_WRITESET  == rcvd->act.type &&
                       GCS_GROUP_PRIMARY == group->state   &&
                       group->nodes[sender_idx].status >= GCS_NODE_STATE_DONOR &&
                       !(group->frag_reset && local) &&
@@ -182,12 +200,12 @@ gcs_group_handle_act_msg (gcs_group_t*          const group,
              * and only in PRIM (skip messages while in state exchange) */
             rcvd->id = ++group->act_id_;
         }
-        else if (GCS_ACT_TORDERED  == rcvd->act.type) {
+        else if (GCS_ACT_WRITESET  == rcvd->act.type) {
             /* Rare situations */
             if (local) {
                 /* Let the sender know that it failed */
                 rcvd->id = -ERESTART;
-                gu_debug("Returning -ERESTART for TORDERED action: group->state"
+                gu_debug("Returning -ERESTART for WRITESET action: group->state"
                          " = %s, sender->status = %s, frag_reset = %s, "
                          "buf = %p",
                          gcs_group_state_str[group->state],
@@ -226,11 +244,11 @@ gcs_group_my_idx (const gcs_group_t* group)
 /*!
  * Creates new configuration action
  * @param group group handle
- * @param act   GCS action object
+ * @param rcvd  GCS action object
  * @param proto protocol version gcs should use for this configuration
  */
 extern ssize_t
-gcs_group_act_conf (gcs_group_t* group, struct gcs_act* act, int* proto);
+gcs_group_act_conf (gcs_group_t* group, struct gcs_act_rcvd* rcvd, int* proto);
 
 /*! Returns state object for state message */
 extern gcs_state_msg_t*
@@ -248,7 +266,11 @@ gcs_group_find_donor(const gcs_group_t* group,
                      int const str_version,
                      int const joiner_idx,
                      const char* const donor_string, int const donor_len,
-                     const gu_uuid_t* ist_uuid, gcs_seqno_t ist_seqno);
+                     const gu::GTID& ist_gtid);
+
+extern int
+gcs_group_param_set(gcs_group_t& group,
+                    const std::string& key, const std::string& val);
 
 extern void
 gcs_group_get_status(const gcs_group_t* group, gu::Status& status);

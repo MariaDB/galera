@@ -134,16 +134,20 @@ public:
          * version */
         static int prefix(wsrep_key_type_t const ws_type, int const ws_ver)
         {
-            if (ws_ver >= 0 && ws_ver <= 4)
+            if (ws_ver >= 0 && ws_ver <= 5)
             {
                 switch (ws_type)
                 {
                 case WSREP_KEY_SHARED:
                     return 0;
-                case WSREP_KEY_SEMI:
-                    return 1;
+                case WSREP_KEY_REFERENCE:
+                    return ws_ver < 4 ? KeySet::Key::P_EXCLUSIVE : 1;
+                case WSREP_KEY_UPDATE:
+                    return ws_ver < 4 ? KeySet::Key::P_EXCLUSIVE :
+                    (ws_ver < 5 ? 1 : 2);
                 case WSREP_KEY_EXCLUSIVE:
-                    return ws_ver < 4 ? KeySet::Key::P_EXCLUSIVE : 2;
+                    return ws_ver < 4 ? KeySet::Key::P_EXCLUSIVE :
+                    (ws_ver < 5 ? 2 : 3);
                 }
             }
             assert(0);
@@ -159,7 +163,7 @@ public:
 
         wsrep_key_type_t wsrep_type(int const ws_ver) const
         {
-            assert(ws_ver >= 0 && ws_ver <= 4);
+            assert(ws_ver >= 0 && ws_ver <= 5);
 
             wsrep_key_type_t ret;
 
@@ -169,10 +173,14 @@ public:
                 ret = WSREP_KEY_SHARED;
                 break;
             case 1:
-                ret = ws_ver == 4 ? WSREP_KEY_SEMI : WSREP_KEY_EXCLUSIVE;
+                ret = ws_ver < 4 ? WSREP_KEY_EXCLUSIVE : WSREP_KEY_REFERENCE;
                 break;
             case 2:
-                assert(ws_ver == 4);
+                assert(ws_ver >= 4);
+                ret = ws_ver < 5 ? WSREP_KEY_EXCLUSIVE : WSREP_KEY_UPDATE;
+                break;
+            case 3:
+                assert(ws_ver >= 5);
                 ret = WSREP_KEY_EXCLUSIVE;
                 break;
             default:
@@ -692,7 +700,7 @@ public:
     {
         assert (version_ != KeySet::EMPTY);
         assert ((uintptr_t(reserved) % GU_WORD_BYTES) == 0);
-        assert (ws_ver <= 4);
+        assert (ws_ver <= 5);
         KeyPart zero(version_);
         prev_().push_back(zero);
     }

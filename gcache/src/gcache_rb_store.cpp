@@ -107,20 +107,21 @@ namespace gcache
             if (gu_likely (BH_is_released(bh)))
             {
                 seqno2ptr_.erase (j);
-                empty_buffer(bh);
 
                 switch (bh->store)
                 {
-                case BUFFER_IN_RB:  discard(bh); break;
+                case BUFFER_IN_RB:
+                    discard(bh);
+                    break;
                 case BUFFER_IN_MEM:
                 {
-                    MemStore* const ms(static_cast<MemStore*>(bh->ctx));
+                    MemStore* const ms(static_cast<MemStore*>(BH_ctx(bh)));
                     ms->discard(bh);
                     break;
                 }
                 case BUFFER_IN_PAGE:
                 {
-                    Page*      const page (static_cast<Page*>(bh->ctx));
+                    Page*      const page (static_cast<Page*>(BH_ctx(bh)));
                     PageStore* const ps   (PageStore::page_store(page));
                     ps->discard(bh);
                     break;
@@ -245,11 +246,9 @@ namespace gcache
         BufferHeader* const bh(BH_cast(ret));
         bh->size    = size;
         bh->seqno_g = SEQNO_NONE;
-        bh->seqno_d = SEQNO_ILL;
         bh->flags   = 0;
         bh->store   = BUFFER_IN_RB;
-        bh->ctx     = this;
-
+        bh->ctx     = reinterpret_cast<BH_ctx_t>(this);
         next_ = ret + size;
         assert((uintptr_t(next_) % MemOps::ALIGNMENT) == 0);
         assert (next_ + sizeof(BufferHeader) <= end_);
@@ -411,8 +410,8 @@ namespace gcache
                 {
                     log_fatal << "Buffer "
                               << reinterpret_cast<const void*>(r->second)
-                              << ", seqno_g " << b->seqno_g << ", seqno_d "
-                              << b->seqno_d << " is not released.";
+                              << ", seqno_g " << b->seqno_g
+                              << " is not released.";
                     assert(0);
                 }
 #endif
@@ -630,6 +629,13 @@ namespace gcache
            offset = -1;
         }
 
+        log_info << "GCache DEBUG: opened preamble:"
+                 << "\nVersion: " << version
+                 << "\nUUID: " << gid_
+                 << "\nSeqno: " << seqno_min << " - " << seqno_max
+                 << "\nOffset: " << offset
+                 << "\nSynced: " << synced;
+
         if (do_recover)
         {
             if (gid_ != gu::UUID())
@@ -709,7 +715,7 @@ namespace gcache
                 assert((uintptr_t(bh) % scan_step) == 0);
 
                 bh->flags |= BUFFER_RELEASED;
-                bh->ctx    = this;
+                bh->ctx    = uint64_t(this);
 
                 int64_t const seqno_g(bh->seqno_g);
 
@@ -975,7 +981,6 @@ namespace gcache
             {
                 if (gu_likely(bh->size) > 0)
                 {
-                    assert(bh->seqno_d >= SEQNO_ILL);
                     assert(bh->size > sizeof(BufferHeader));
 
                     if (bh->seqno_g > 0) last_bh = bh;

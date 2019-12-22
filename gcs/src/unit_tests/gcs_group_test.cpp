@@ -4,17 +4,11 @@
  * $Id$
  */
 
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
-#include <stdlib.h>
-
 #include "../gcs_group.hpp"
 #include "../gcs_act_proto.hpp"
 #include "../gcs_comp_msg.hpp"
 
-#include <check.h>
-#include "gcs_group_test.hpp"
+#include "gcs_group_test.hpp" // must be included last
 
 #define TRUE (0 == 0)
 #define FALSE (!TRUE)
@@ -110,7 +104,7 @@ START_TEST (gcs_group_configuration)
     frg1.frag      = NULL;
     frg1.frag_len  = 0;
     frg1.frag_no   = 0;
-    frg1.act_type  = GCS_ACT_TORDERED;
+    frg1.act_type  = GCS_ACT_WRITESET;
     frg1.proto_ver = 0;
 
     // normal fragments
@@ -134,7 +128,9 @@ START_TEST (gcs_group_configuration)
     mark_point();
 
     // ready
-    gcs_group_init (&group, NULL, "my node", "my addr", 0, 0, 0);
+    gu::Config cnf;
+    gcs_group_register(&cnf);
+    gcs_group_init (&group, &cnf, NULL, "my node", "my addr", 0, 0, 0);
     fail_if (gcs_group_is_primary(&group));
     fail_if (group.num != 1);
 
@@ -238,7 +234,7 @@ START_TEST (gcs_group_configuration)
     fail_if (strncmp((const char*)act->buf, act_buf, act_len),
              "Action received: '%s', expected '%s'", act_buf);
     fail_if (r_act.sender_idx != 0);
-    fail_if (act->type != GCS_ACT_TORDERED);
+    fail_if (act->type != GCS_ACT_WRITESET);
     fail_if (r_act.id != seqno, "Expected seqno %llu, found %llu", seqno, r_act.id);
     seqno++;
     // cleanup
@@ -283,7 +279,7 @@ START_TEST (gcs_group_configuration)
     fail_if (strncmp((const char*)act->buf, act_buf, act_len),
              "Action received: '%s', expected '%s'", act_buf);
     fail_if (r_act.sender_idx != 0);
-    fail_if (act->type != GCS_ACT_TORDERED);
+    fail_if (act->type != GCS_ACT_WRITESET);
     fail_if (r_act.id != seqno, "Expected seqno %llu, found %llu", seqno, r_act.id);
     seqno++;
     // cleanup
@@ -349,7 +345,7 @@ return;
     fail_if (act->buf_len != act_len);
     fail_if (act->buf != NULL);
     fail_if (r_act.sender_idx != 0);
-    fail_if (act->type != GCS_ACT_TORDERED);
+    fail_if (act->type != GCS_ACT_WRITESET);
     fail_if (r_act.id != seqno, "Expected seqno %llu, found %llu", seqno, r_act.id);
     seqno++;
 
@@ -362,7 +358,7 @@ return;
     fail_if (strncmp((const char*)act->buf, act_buf, act_len),
              "Action received: '%s', expected '%s'", act_buf);
     fail_if (r_act.sender_idx != 1);
-    fail_if (act->type != GCS_ACT_TORDERED);
+    fail_if (act->type != GCS_ACT_WRITESET);
     fail_if (r_act.id != seqno, "Expected seqno %llu, found %llu", seqno, r_act.id);
     seqno++;
     // cleanup
@@ -422,7 +418,9 @@ START_TEST(gcs_group_last_applied)
     fail_if (gcs_comp_msg_add (comp, DISTANTHOST"2",2) < 0);
     fail_if (gcs_comp_msg_add (comp, DISTANTHOST"2",2) >= 0);
 
-    gcs_group_init(&group, NULL, "", "", 0, 0, 1);
+    gu::Config cnf;
+    gcs_group_register(&cnf);
+    gcs_group_init(&group, &cnf, NULL, "", "", 0, 0, 1);
     mark_point();
     ret = new_component (&group, comp);
     fail_if (ret < 0);
@@ -500,13 +498,12 @@ END_TEST
 
 START_TEST(test_gcs_group_find_donor)
 {
+    gu::Config cnf;
+    gcs_group_register(&cnf);
     gcs_group_t group;
-    gcs_group_init(&group, NULL, "", "", 0, 0, 0);
+    gcs_group_init(&group, &cnf, NULL, "", "", 0, 0, 0);
     const char* s_group_uuid = "0d0d0d0d-0d0d-0d0d-0d0d-0d0d0d0d0d0d";
     gu_uuid_scan(s_group_uuid, strlen(s_group_uuid), &group.group_uuid);
-    gu_uuid_t* group_uuid = &group.group_uuid;
-    gu_uuid_t empty_uuid;
-    memset(&empty_uuid, 0, sizeof(empty_uuid));
 
     // five nodes
     // idx name segment  seqno
@@ -524,23 +521,25 @@ START_TEST(test_gcs_group_find_donor)
     const gcs_seqno_t seqnos[] = {90, 95, 105, 100, 90, 95, 105};
     gcs_node_t* nodes = group.nodes;
     const int joiner = 3;
-    const gcs_seqno_t ist_seqno = 100;
+
     for(int i = 0; i < number; i++)
     {
+        uint8_t const vp(gcs_group_conf_to_vote_policy(cnf));
         char name[32];
         snprintf(name, sizeof(name), "home%d", i);
         gcs_node_init(&nodes[i], NULL, name, name,
                       "", 0, 0, 0, i > joiner ? 1 : 0);
         nodes[i].status = GCS_NODE_STATE_SYNCED;
         nodes[i].state_msg = gcs_state_msg_create(
-            &empty_uuid, &empty_uuid, &empty_uuid,
+            &GU_UUID_NIL, &GU_UUID_NIL, &GU_UUID_NIL,
             0, 0, seqnos[i], 0,
-            GCS_NODE_STATE_SYNCED,
-            GCS_NODE_STATE_SYNCED,
+            GCS_SEQNO_ILL, 0, vp, 0,
+            GCS_NODE_STATE_SYNCED, GCS_NODE_STATE_SYNCED,
             "", "",
             0, 0, 0, 0, 0, 0,
             0, 0);
     }
+
     group.quorum.act_id = 0; // in safe range.
     fail_if (group.quorum.gcs_proto_ver != -1);
     fail_if (group.gcs_proto_ver != 0);
@@ -550,39 +549,41 @@ START_TEST(test_gcs_group_find_donor)
     const int sv = 2; // str version.
 #define SARGS(s) s, strlen(s)
     //========== sst ==========
+    gu::GTID const empty_gtid;
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home3"),
-                                 &empty_uuid, GCS_SEQNO_ILL);
+                                 empty_gtid);
     fail_if(donor != -EHOSTDOWN);
 
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home1,home2"),
-                                 &empty_uuid, GCS_SEQNO_ILL);
+                                 empty_gtid);
     fail_if(donor != 1);
 
     nodes[1].status = GCS_NODE_STATE_JOINER;
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home1,home2"),
-                                 &empty_uuid, GCS_SEQNO_ILL);
+                                 empty_gtid);
     fail_if(donor != 2);
     nodes[1].status = GCS_NODE_STATE_SYNCED;
 
     // handle dangling comma.
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home3,"),
-                                 &empty_uuid, GCS_SEQNO_ILL);
+                                 empty_gtid);
     fail_if(donor != 0);
 
     // ========== ist ==========
     // by name.
+    gu::GTID const group_gtid(group.group_uuid, 100);
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home0,home1,home2"),
-                                 group_uuid, ist_seqno);
+                                 group_gtid);
     fail_if(donor != 1);
 
     group.quorum.act_id = 1498; // not in safe range.
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home2"),
-                                 group_uuid, ist_seqno);
+                                 group_gtid);
     fail_if(donor != 2);
 
     group.quorum.act_id = 1497; // in safe range. in segment.
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home2"),
-                                 group_uuid, ist_seqno);
+                                 group_gtid);
     fail_if(donor != 1);
 
     group.quorum.act_id = 1497; // in safe range. cross segment.
@@ -590,7 +591,7 @@ START_TEST(test_gcs_group_find_donor)
     nodes[1].status = GCS_NODE_STATE_JOINER;
     nodes[2].status = GCS_NODE_STATE_JOINER;
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home2"),
-                                 group_uuid, ist_seqno);
+                                 group_gtid);
     fail_if(donor != 5);
     nodes[0].status = GCS_NODE_STATE_SYNCED;
     nodes[1].status = GCS_NODE_STATE_SYNCED;

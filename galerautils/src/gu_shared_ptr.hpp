@@ -26,6 +26,7 @@
 #elif defined(HAVE_BOOST_SHARED_PTR_HPP)
 #   include <boost/shared_ptr.hpp>
 #   include <boost/enable_shared_from_this.hpp>
+#   include <boost/make_shared.hpp>
 #   define GU_SHARED_PTR_NAMESPACE boost
 #else
     #error No supported shared_ptr headers
@@ -44,6 +45,22 @@ namespace gu
     {
         typedef GU_SHARED_PTR_NAMESPACE::enable_shared_from_this<T> type;
     };
+
+#if __cplusplus >= 201103L
+    /* variadic templates */
+    template <class T, class... Args>
+    typename shared_ptr<T>::type make_shared(Args&&... args)
+    {
+        return GU_SHARED_PTR_NAMESPACE::make_shared<T>(args...);
+    }
+#else
+    /* add more templates if needed */
+    template <class T>
+    typename shared_ptr<T>::type make_shared()
+    {
+        return GU_SHARED_PTR_NAMESPACE::make_shared<T>();
+    }
+#endif
 }
 
 #undef GU_SHARED_PTR_NAMESPACE

@@ -1,10 +1,10 @@
-// Copyright (C) 2007 Codership Oy <info@codership.com>
+// Copyright (C) 2007-2015 Codership Oy <info@codership.com>
 
 // $Id$
 
-#include <check.h>
-#include "gcs_fifo_test.hpp"
 #include "../gcs_fifo_lite.hpp"
+
+#include "gcs_fifo_test.hpp" // must be included last
 
 #define FIFO_LENGTH 10
 
@@ -39,7 +39,7 @@ START_TEST (gcs_fifo_lite_test)
         *item = i;
         gcs_fifo_lite_push_tail (fifo);
     }
-    fail_if (fifo->used != FIFO_LENGTH, "fifo->used is %zu, expected %zu", 
+    fail_if (fifo->used != FIFO_LENGTH, "fifo->used is %zu, expected %zu",
              fifo->used, FIFO_LENGTH);
 
     // test remove

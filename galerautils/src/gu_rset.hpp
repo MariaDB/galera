@@ -1,4 +1,4 @@
-/* Copyright (C) 2013 Codership Oy <info@codership.com> */
+/* Copyright (C) 2013-2019 Codership Oy <info@codership.com> */
 /*!
  * @file common RecordSet interface
  *
@@ -96,6 +96,27 @@ protected:
 
     ~RecordSet() {}
 };
+
+/*! specialization of Vector::serialize() method */
+template<> inline RecordSet::GatherVector::size_type
+RecordSet::GatherVector::serialize(void*     const buf,
+                                   size_type const buf_size,
+                                   size_type const offset /* = 0 */)
+{
+    byte_t*       to (static_cast<byte_t*>(buf) + offset);
+    byte_t* const end(static_cast<byte_t*>(buf) + buf_size);
+    for (size_type i(0); i < size(); ++i)
+    {
+        const gu::Buf& f((*this)[i]);
+        if (to + f.size > end)
+        {
+            gu_throw_fatal << "attempt to write beyond buffer boundary";
+        }
+        const gu::byte_t* from(static_cast<const gu::byte_t*>(f.ptr));
+        to = std::copy(from, from + f.size, to);
+    }
+    return to - static_cast<byte_t*>(buf);
+}
 
 
 #if defined(__GNUG__)
@@ -339,7 +360,8 @@ private:
 
     RecordSetOut (const RecordSetOut&);
     RecordSetOut& operator = (const RecordSetOut&);
-};
+
+}; /* class RecordSetOut */
 
 
 /*! class to recover records from a buffer */

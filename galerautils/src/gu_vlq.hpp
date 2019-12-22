@@ -20,6 +20,8 @@
 #include "gu_macros.h"
 #include <cassert>
 
+#include <cassert>
+
 #define GU_VLQ_CHECKS
 #define GU_VLQ_ALEX
 
