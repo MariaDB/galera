@@ -40,7 +40,7 @@ Description: Replication framework for transactional applications
  .
  This package contains the Galera library/plugin.
 
-Package: galera-arbitrator-3
+Package: galera-arbitrator-4
 Architecture: any
 Conflicts: garbd-2, garbd2, percona-xtradb-cluster-garbd-2.x
 Breaks: percona-xtradb-cluster-galera-2.x
