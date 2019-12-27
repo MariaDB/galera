@@ -17,7 +17,8 @@ Vcs-Git: https://salsa.debian.org/mariadb-team/galera-4.git
 Package: galera-4
 Architecture: any
 Section: libs
-Depends: ${misc:Depends}, ${shlibs:Depends}
+Depends: ${misc:Depends},
+         ${shlibs:Depends}
 Conflicts: galera-3,
            garbd-2,
            garbd2,
@@ -29,7 +30,10 @@ Conflicts: galera-3,
            percona-xtradb-cluster-galera-4.x,
            percona-xtradb-cluster-garbd-2.x,
            percona-xtradb-cluster-garbd-3.x
-Provides: galera, galera3, percona-xtradb-cluster-galera-25, wsrep
+Provides: galera,
+          galera3,
+          percona-xtradb-cluster-galera-25,
+          wsrep
 Breaks: galera
 Replaces: galera
 Description: Replication framework for transactional applications
@@ -42,10 +46,14 @@ Description: Replication framework for transactional applications
 
 Package: galera-arbitrator-4
 Architecture: any
-Conflicts: garbd-2, garbd2, percona-xtradb-cluster-garbd-2.x
+Conflicts: garbd-2,
+           garbd2,
+           percona-xtradb-cluster-garbd-2.x
 Breaks: percona-xtradb-cluster-galera-2.x
 Replaces: percona-xtradb-cluster-galera-2.x
-Depends: lsb-base (>= 3.0-6), ${misc:Depends}, ${shlibs:Depends}
+Depends: lsb-base (>= 3.0-6),
+         ${misc:Depends},
+         ${shlibs:Depends}
 Description: Galera arbitrator daemon
  Galera is a fast synchronous multimaster wsrep provider (replication engine)
  for transactional databases and similar applications. For more information
