@@ -1,3 +1,10 @@
+galera-4 (26.4.3-2) UNRELEASED; urgency=medium
+
+  * Open new changelog entry. The final changelog will be generated
+    with 'gbp dch -avR' before release.
+
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 27 Dec 2019 10:20:02 +0200
+
 galera-4 (26.4.3-1) unstable; urgency=medium
 
   * New upstream version 26.4.3
