@@ -31,8 +31,8 @@ Conflicts: galera-3,
            percona-xtradb-cluster-garbd-2.x,
            percona-xtradb-cluster-garbd-3.x
 Provides: galera,
-          galera3,
-          percona-xtradb-cluster-galera-25,
+          galera4,
+          percona-xtradb-cluster-galera-26,
           wsrep
 Breaks: galera
 Replaces: galera
@@ -46,8 +46,11 @@ Description: Replication framework for transactional applications
 
 Package: galera-arbitrator-4
 Architecture: any
-Conflicts: garbd-2,
+Conflicts: galera-arbitrator-3,
+           garbd-2,
            garbd2,
+           percona-galera-arbitrator-3,
+           percona-galera-arbitrator-4,
            percona-xtradb-cluster-garbd-2.x
 Breaks: percona-xtradb-cluster-galera-2.x
 Replaces: percona-xtradb-cluster-galera-2.x
