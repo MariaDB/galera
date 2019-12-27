@@ -1,3 +1,66 @@
+# Inlude Salsa-CI as a base
 include:
  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
+
+stages:
+  - build
+  - test # Stage referenced by Salsa-CI template reprotest stanza, so must exist
+  - publish # Stage referenced by Salsa-CI template aptly stanza, so must exist even though not used
+  - upgrade in Sid
+  - upgrade from Buster/Stretch/Jessie
+
+# In addition to Salsa-CI, also run these fully Galera specific build jobs
+galera-4.x to galera-4.y upgrade:
+  stage: upgrade in Sid
+  dependencies:
+    - build
+  image: debian:sid
+  artifacts:
+    when: always
+    name: "$CI_BUILD_NAME"
+    paths:
+      - ${WORKING_DIR}/debug
+  script:
+    - sed -i "s/101/0/g" -i /usr/sbin/policy-rc.d # Enable automatic restarts from maint scripts
+    - cd ${WORKING_DIR} # Don't repeat this step, it's just cd ./debian/output
+    - apt-get update
+    # Install almost everything currently in Debian Buster
+    - apt-get install -y galera-3 galera-arbitrator-3
+    # Verify installation of MariaDB from Buster
+    - dpkg -l | grep -iE 'maria|mysql|galera' || true # List installed
+    # Install MariaDB built in this commit
+    - apt-get install -y ./*.deb
+    # Verify installation of MariaDB built in this commit
+    - dpkg -l | grep -iE 'maria|mysql|galera' || true # List installed
+  variables:
+      GIT_STRATEGY: none
+
+galera-3 buster to galera-4 upgrade:
+  stage: upgrade from Buster/Stretch/Jessie
+  dependencies:
+    - build
+  image: debian:buster
+  artifacts:
+    when: always
+    name: "$CI_BUILD_NAME"
+    paths:
+      - ${WORKING_DIR}/debug
+  script:
+    - sed -i "s/101/0/g" -i /usr/sbin/policy-rc.d # Enable automatic restarts from maint scripts
+    - cd ${WORKING_DIR} # Don't repeat this step, it's just cd ./debian/output
+    - apt-get update
+    # Install almost everything currently in Debian Buster
+    - apt-get install -y 'galera-*' 
+    # Verify installation of MariaDB from Buster
+    - dpkg -l | grep -iE 'maria|mysql|galera' || true # List installed
+    # Install MariaDB built in this commit
+    - sed 's/buster/sid/g' -i /etc/apt/sources.list # Enable next Debian release
+    - sed '/sid-updates/d' -i /etc/apt/sources.list # Remove repositories that don't exist for Sid
+    - sed '/security/d' -i /etc/apt/sources.list # Remove repositories that don't exist for Sid
+    - apt-get update; apt-get install -y apt # Uprade minimal stack first
+    - apt-get install -y ./*.deb
+    # Verify installation of MariaDB built in this commit
+    - dpkg -l | grep -iE 'maria|mysql|galera' || true # List installed
+  variables:
+      GIT_STRATEGY: none
