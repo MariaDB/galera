@@ -1,0 +1,34 @@
+From 416222e6e76484323002d316d261a6c3b0056044 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Otto=20Kek=C3=A4l=C3=A4inen?= <otto@kekalainen.net>
+Date: Sat, 4 Jan 2020 23:47:00 +0200
+Subject: [PATCH] Remove obsolete target 'syslog' from systemd service
+ definition
+
+Declaring After=syslog.target is unnecessary by now because syslog is
+socket-activated and will therefore be started when needed.
+
+Having network.target is enough, and that is e.g. how the MariaDB systemd
+service defines it.
+
+This change is safe on the Galera 4.x branch since it most likely will not
+target very old Linux distros anymore.
+
+See also:
+https://lintian.debian.org/tags/systemd-service-file-refers-to-obsolete-target.html
+---
+ garb/files/garb.service | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/garb/files/garb.service b/garb/files/garb.service
+index 9bd9ddaa7..198755c0c 100644
+--- a/garb/files/garb.service
++++ b/garb/files/garb.service
+@@ -2,7 +2,7 @@
+ 
+ [Unit]
+ Description=Galera Arbitrator Daemon
+-After=network.target syslog.target
++After=network.target
+ 
+ [Install]
+ WantedBy=multi-user.target

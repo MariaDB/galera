@@ -3,3 +3,5 @@
 526.patch
 527.patch
 disable-sporadic-failing-tests.patch
+systemd-obsolete-target.patch
+systemd-documentation.patch

@@ -1,0 +1,33 @@
+From 968b03ea08c9c50a3946c0c3926e450ecedcdcfa Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Otto=20Kek=C3=A4l=C3=A4inen?= <otto@kekalainen.net>
+Date: Sat, 4 Jan 2020 23:48:24 +0200
+Subject: [PATCH] Add Documentation keys to systemd service definition
+
+Documentation for systemd service files can be automatically viewed using
+'systemctl help servicename' if this field is present.
+
+See also:
+https://lintian.debian.org/tags/systemd-service-file-missing-documentation-key.html
+---
+ garb/files/garb.service | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/garb/files/garb.service b/garb/files/garb.service
+index 198755c0c..45cb7db05 100644
+--- a/garb/files/garb.service
++++ b/garb/files/garb.service
+@@ -2,6 +2,8 @@
+ 
+ [Unit]
+ Description=Galera Arbitrator Daemon
++Documentation=man:garbd(8)
++Documentation=https://galeracluster.com/library/documentation/arbitrator.html
+ After=network.target
+ 
+ [Install]
+@@ -19,5 +21,3 @@ KillSignal=SIGINT
+ 
+ TimeoutSec=2m
+ PrivateTmp=false
+-
+-
