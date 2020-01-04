@@ -26,7 +26,7 @@ galera-4.x to galera-4.y upgrade:
     - cd ${WORKING_DIR} # Don't repeat this step, it's just cd ./debian/output
     - apt-get update
     # Install almost everything currently in Debian Buster
-    - apt-get install -y galera-3 galera-arbitrator-3
+    - apt-get install -y galera-4 galera-arbitrator-4
     # Verify installation of MariaDB from Buster
     - dpkg -l | grep -iE 'maria|mysql|galera' || true # List installed
     # Install MariaDB built in this commit
@@ -35,6 +35,9 @@ galera-4.x to galera-4.y upgrade:
     - dpkg -l | grep -iE 'maria|mysql|galera' || true # List installed
   variables:
       GIT_STRATEGY: none
+  except:
+    variables:
+      - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
 
 galera-3 buster to galera-4 upgrade:
   stage: upgrade from Buster/Stretch/Jessie
@@ -51,7 +54,7 @@ galera-3 buster to galera-4 upgrade:
     - cd ${WORKING_DIR} # Don't repeat this step, it's just cd ./debian/output
     - apt-get update
     # Install almost everything currently in Debian Buster
-    - apt-get install -y 'galera-*' 
+    - apt-get install -y 'galera-*'
     # Verify installation of MariaDB from Buster
     - dpkg -l | grep -iE 'maria|mysql|galera' || true # List installed
     # Install MariaDB built in this commit
@@ -64,3 +67,6 @@ galera-3 buster to galera-4 upgrade:
     - dpkg -l | grep -iE 'maria|mysql|galera' || true # List installed
   variables:
       GIT_STRATEGY: none
+  except:
+    variables:
+      - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
