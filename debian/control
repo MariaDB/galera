@@ -4,6 +4,7 @@ Uploaders: Otto Kekäläinen <otto@debian.org>
 Section: database
 Priority: optional
 Standards-Version: 4.4.1
+Rules-Requires-Root: no
 Build-Depends: check,
                debhelper-compat (= 12),
                libboost-dev (>= 1.41),
