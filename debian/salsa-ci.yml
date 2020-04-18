@@ -3,12 +3,26 @@ include:
  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
 
+variables:
+  SALSA_CI_DISABLE_MISSING_BREAKS: 0
+  SALSA_CI_DISABLE_RC_BUGS: 0
+
 stages:
   - build
   - test # Stage referenced by Salsa-CI template reprotest stanza, so must exist
   - publish # Stage referenced by Salsa-CI template aptly stanza, so must exist even though not used
   - upgrade in Sid
   - upgrade from Buster/Stretch/Jessie
+
+build buster-backports:
+  extends: .build-package
+  variables:
+      RELEASE: buster-backports
+
+build stretch-backports:
+  extends: .build-package
+  variables:
+      RELEASE: stretch-backports
 
 # In addition to Salsa-CI, also run these fully Galera specific build jobs
 galera-4.x to galera-4.y upgrade:
