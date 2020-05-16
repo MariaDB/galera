@@ -1,3 +1,9 @@
+galera-4 (26.4.3-5) UNRELEASED; urgency=medium
+
+  * Open new changelog entry. This will be replaced by gbp-dch.
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 16 May 2020 12:02:41 +0300
+
 galera-4 (26.4.3-4) unstable; urgency=medium
 
   [ Otto Kekäläinen ]
