@@ -1,9 +1,0 @@
-fix-systemd-unit-file
-fix-systemd-config-path.patch
-910471.patch
-525.patch
-526.patch
-527.patch
-disable-sporadic-failing-tests.patch
-systemd-obsolete-target.patch
-systemd-documentation.patch

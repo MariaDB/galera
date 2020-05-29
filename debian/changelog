@@ -1,8 +1,10 @@
-galera-4 (26.4.3-5) UNRELEASED; urgency=medium
+galera-4 (26.4.5-1) unstable; urgency=medium
 
-  * Open new changelog entry. This will be replaced by gbp-dch.
+  * New upstream version 26.4.5. This is the first official release for
+    general availability.
+  * Remove all patches as they have been applied upstream.
 
- -- Otto Kekäläinen <otto@debian.org>  Sat, 16 May 2020 12:02:41 +0300
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 29 May 2020 23:39:16 +0300
 
 galera-4 (26.4.3-4) unstable; urgency=medium
 
