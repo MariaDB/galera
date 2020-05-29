@@ -209,7 +209,7 @@ namespace galera
 
         size_t hash() const
         {
-            return gu_table_hash(&keys_[0], keys_.size());
+            return gu_table_hash(keys_.data(), keys_.size());
         }
 
         size_t hash_with_flags() const

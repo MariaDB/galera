@@ -637,26 +637,25 @@ namespace galera
         void set_ends_nbo(wsrep_seqno_t seqno) { ends_nbo_ = seqno; }
         wsrep_seqno_t ends_nbo() const { return ends_nbo_; }
 
-        void mark_dummy(int const line = -2)
+        void mark_dummy()
         {
             set_depends_seqno(WSREP_SEQNO_UNDEFINED);
             set_flags(flags() | F_ROLLBACK);
-            switch(state())
-            {
-            case S_CERTIFYING:
-            case S_REPLICATING:
-                set_state(S_ABORTING, line);
-                break;
-            case S_ABORTING:
-            case S_ROLLING_BACK:
-            case S_ROLLED_BACK:
-                break;
-            default:
-                assert(0);
-            }
-            // must be set to S_ROLLED_BACK after commit_cb()
         }
-        bool is_dummy()   const { return (flags() &  F_ROLLBACK); }
+
+        // Mark action dummy and assign gcache buffer pointer. The
+        // action size is left zero.
+        void mark_dummy_with_action(const void* buf)
+        {
+            mark_dummy();
+            action_.first = buf;
+            action_.second = 0;
+        }
+        bool is_dummy() const
+        {
+            return (flags() &  F_ROLLBACK) &&
+                (flags() != EXPLICIT_ROLLBACK_FLAGS);
+        }
         bool skip_event() const { return (flags() == F_ROLLBACK); }
 
         bool is_streaming() const
@@ -929,6 +928,12 @@ namespace galera
             {
                 /* make sure this fragment depends on the previous */
                 wsrep_seqno_t prev_seqno(last_ts_seqno_);
+                if (prev_seqno == WSREP_SEQNO_UNDEFINED)
+                {
+                    assert((flags() & TrxHandle::F_COMMIT) ||
+                           (flags() & TrxHandle::F_ROLLBACK));
+                    prev_seqno = 0;
+                }
                 assert(version() >= WriteSetNG::VER5);
                 assert(prev_seqno >= 0);
                 assert(prev_seqno <= last_seen_seqno);

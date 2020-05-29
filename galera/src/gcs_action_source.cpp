@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2010-2018 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2020 Codership Oy <info@codership.com>
 //
 
 #include "replicator.hpp"
@@ -72,6 +72,7 @@ galera::GcsActionSource::resend_writeset(const struct gcs_action& act)
     ssize_t ret;
     struct gu_buf const sb = { act.buf, act.size };
     GcsI::WriteSetVector v;
+    v.resize(1);
     v[0] = sb;
 
     /* grab send monitor to resend asap */
@@ -195,6 +196,12 @@ ssize_t galera::GcsActionSource::process(void* recv_ctx, bool& exit_loop)
     {
         assert(act.seqno_l < 0);
         assert(act.seqno_g < 0);
+
+        if (GCS_ACT_INCONSISTENCY == act.type)
+        {
+            assert(0 == rc);
+            rc = INCONSISTENCY_CODE;
+        }
     }
 
     return rc;

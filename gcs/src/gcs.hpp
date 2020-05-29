@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2017 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2020 Codership Oy <info@codership.com>
  *
  * $Id$
  */
@@ -74,7 +74,7 @@ gcs_create  (gu_config_t* conf, gcache_t* cache,
  *                 application state.
  *                 Should be undefined for undefined state.
  *
- * @return 0 in case of success, -EBUSY if conneciton is already opened,
+ * @return 0 in case of success, -EBUSY if connection is already opened,
  *         -EBADFD if connection object is being destroyed.
  */
 extern long gcs_init (gcs_conn_t*     conn,
@@ -158,6 +158,7 @@ typedef enum gcs_act_type
     GCS_ACT_VOTE,       //! vote on GTID outcome
     GCS_ACT_SERVICE,    //! service action, sent by GCS
     GCS_ACT_ERROR,      //! error happened while receiving the action
+    GCS_ACT_INCONSISTENCY,//! inconsistency event
     GCS_ACT_UNKNOWN     //! undefined/unknown action type
 }
 gcs_act_type_t;

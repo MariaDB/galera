@@ -1,7 +1,5 @@
 /*
- * Copyright (C) 2009 Codership Oy <info@codership.com>
- *
- * $Id$
+ * Copyright (C) 2009-2019 Codership Oy <info@codership.com>
  */
 
 #ifndef EVS_MESSAGE2_HPP
@@ -142,6 +140,8 @@ public:
         EVS_T_LEAVE    = 6, /*!< Leave message          */
         EVS_T_DELAYED_LIST = 7 /*!< Evict list message */
     };
+
+    static const size_t num_message_types = EVS_T_DELAYED_LIST + 1;
 
     typedef std::map<UUID, uint8_t> DelayedList;
 
@@ -373,7 +373,7 @@ public:
         install_view_id_ (install_view_id),
         range_uuid_      (range_uuid),
         range_           (range),
-        tstamp_          (gu::datetime::Date::now()),
+        tstamp_          (gu::datetime::Date::monotonic()),
         node_list_       (node_list),
         delayed_list_    ()
     { }

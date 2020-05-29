@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2014 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2019 Codership Oy <info@codership.com>
  */
 
 /*!
@@ -172,22 +172,33 @@ class gcomm::ProtoDownMeta
 public:
     ProtoDownMeta(const uint8_t user_type = 0xff,
                   const Order   order     = O_SAFE,
-                  const UUID&   uuid      = UUID::nil(),
+                  const UUID&   source      = UUID::nil(),
                   const int     segment   = 0) :
         user_type_ (user_type),
         order_     (order),
-        source_    (uuid),
+        source_    (source),
+        target_    (UUID::nil()),
         segment_   (segment)
+    { }
+
+    ProtoDownMeta(const UUID& target)
+        : user_type_(0xff)
+        , order_ (O_SAFE)
+        , source_(UUID::nil())
+        , target_(target)
+        , segment_(0)
     { }
 
     uint8_t     user_type() const { return user_type_; }
     Order       order()     const { return order_;     }
     const UUID& source()    const { return source_;    }
+    const UUID& target()    const { return target_;    }
     int         segment()   const { return segment_;   }
 private:
     const uint8_t user_type_;
     const Order   order_;
     const UUID    source_;
+    const UUID    target_;
     const int     segment_;
 };
 
@@ -316,7 +327,8 @@ public:
 
     void evict(const UUID& uuid)
     {
-        evict_list_.insert(std::make_pair(uuid, gu::datetime::Date::now()));
+        evict_list_.insert(
+            std::make_pair(uuid, gu::datetime::Date::monotonic()));
         handle_evict(uuid);
         for (CtxList::iterator i(down_context_.begin());
              i != down_context_.end(); ++i)

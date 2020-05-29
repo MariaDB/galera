@@ -1,4 +1,4 @@
-Import('env', 'x86', 'sysname', 'machine')
+Import('env', 'x86', 'sysname')
 
 libgalerautils_env = env.Clone()
 
@@ -40,8 +40,7 @@ crc32c_sources = [ '#/www.evanjones.ca/crc32c.c' ]
 crc32c_objs = crc32c_env.SharedObject(crc32c_sources)
 
 if x86:
-    if machine != 'ppc64' and machine != 'ppc64le':
-        crc32c_env.Append(CFLAGS = ' -msse4.2')
+    crc32c_env.Append(CFLAGS = ' -msse4.2')
     if sysname == 'sunos':
         # Ideally we want to simply strip SSE4.2 flag from the resulting
         # crc32.pic.o
@@ -81,7 +80,6 @@ libgalerautilsxx_sources = [
     'gu_exception.cpp',
     'gu_serialize.cpp',
     'gu_logger.cpp',
-    'gu_prodcons.cpp',
     'gu_regex.cpp',
     'gu_string_utils.cpp',
     'gu_uri.cpp',
