@@ -25,6 +25,8 @@
 
 gu::Config& check_trace_conf();
 
+extern "C" void check_trace_log_cb(int, const char*);
+
 namespace gcomm
 {
     class TraceMsg
@@ -251,10 +253,11 @@ namespace gcomm
     public:
         DummyNode(gu::Config& conf,
                   const size_t index,
+                  const gcomm::UUID& uuid,
                   const std::list<Protolay*>& protos) :
             Toplay (conf),
             index_  (index),
-            uuid_   (UUID(static_cast<int32_t>(index))),
+            uuid_   (uuid),
             protos_ (protos),
             cvi_    (),
             tr_     (),
@@ -546,7 +549,17 @@ namespace gcomm
     class PropagationMatrix
     {
     public:
-        PropagationMatrix() : tp_(), prop_() { }
+        PropagationMatrix() : tp_(), prop_()
+        {
+            // Some tests which deal with timer expiration require that
+            // the current time is far enough from zero. Start from
+            // 100 secs after zero, this should give enough headroom
+            // for all tests.
+            gu::datetime::SimClock::init(100*gu::datetime::Sec);
+            // Uncomment this to get logs with simulated timestamps.
+            // The low will be written into stderr.
+            // gu_log_cb = check_trace_log_cb;
+        }
         ~PropagationMatrix();
 
         void insert_tp(DummyNode* t);

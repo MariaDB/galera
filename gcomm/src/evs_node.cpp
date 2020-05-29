@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2019 Codership Oy <info@codership.com>
  */
 
 #include "evs_node.hpp"
@@ -8,6 +8,7 @@
 
 #include <ostream>
 
+const size_t gcomm::evs::Node::invalid_index(std::numeric_limits<size_t>::max());
 
 std::ostream&
 gcomm::evs::operator<<(std::ostream& os, const gcomm::evs::Node& n)
@@ -47,6 +48,8 @@ gcomm::evs::Node::Node(const Node& n)
                          new DelayedListMessage(*n.delayed_list_message_) : 0),
     tstamp_          (n.tstamp_),
     seen_tstamp_     (n.seen_tstamp_),
+    last_requested_range_tstamp_(),
+    last_requested_range_(),
     fifo_seq_        (n.fifo_seq_),
     segment_         (n.segment_)
 { }
@@ -115,7 +118,7 @@ bool gcomm::evs::Node::is_inactive() const
 void gcomm::evs::InspectNode::operator()(std::pair<const gcomm::UUID, Node>& p) const
 {
     Node& node(p.second);
-    gu::datetime::Date now(gu::datetime::Date::now());
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
     if (node.tstamp() + node.proto_.suspect_timeout_ < now)
     {
         if (node.suspected_ == false)

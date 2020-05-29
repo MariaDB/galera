@@ -1,6 +1,6 @@
 ###################################################################
 #
-# Copyright (C) 2010-2017 Codership Oy <info@codership.com>
+# Copyright (C) 2010-2020 Codership Oy <info@codership.com>
 #
 # SCons build script to build galera libraries
 #
@@ -65,16 +65,18 @@ Default target: all
 
 Commandline Options:
     debug=n             debug build with optimization level n
+    asan=[0|1]          disable or enable ASAN instrumentation
     build_dir=dir       build directory, default: '.'
     boost=[0|1]         disable or enable boost libraries
     system_asio=[0|1]   use system asio library, if available
     boost_pool=[0|1]    use or not use boost pool allocator
     revno=XXXX          source code revision number
     bpostatic=path      a path to static libboost_program_options.a
+    static_ssl=path     a path to static SSL libraries
     extra_sysroot=path  a path to extra development environment (Fink, Homebrew, MacPorts, MinGW)
-    version=X.X.X       galera version
     bits=[32bit|64bit]
     gcov=[True|False]   compile Galera for code coverage reporting
+    install=path        install files under path
 ''')
 # bpostatic option added on Percona request
 
@@ -114,6 +116,7 @@ build_dir = ARGUMENTS.get('build_dir', '')
 # Debug/dbug flags
 debug = ARGUMENTS.get('debug', -1)
 dbug  = ARGUMENTS.get('dbug', False)
+asan = ARGUMENTS.get('asan', 0)
 
 gcov = ARGUMENTS.get('gcov', False)
 
@@ -141,17 +144,10 @@ elif x86:
             if sysname == 'linux':
                 link_arch = ' -Wl,-melf_i386'
     else:
-        if machine == 'ppc64':
-          compile_arch = ' -mtune=native'
-          link_arch = ' -Wl,-melf64ppc'
-        elif machine == 'ppc64le':
-          compile_arch = ' -mtune=native'
-          link_arch = ' -Wl,-melf64lppc'
-        else:
-          compile_arch = ' -m64'
-          if sysname == 'linux':
+        compile_arch = ' -m64'
+        if sysname == 'linux':
             link_arch = ' -Wl,-melf_x86_64'
-        link_arch = compile_arch + link_arch
+    link_arch = compile_arch + link_arch
 elif machine == 's390x':
     compile_arch = ' -mzarch'
     if bits == 32:
@@ -161,20 +157,21 @@ boost      = int(ARGUMENTS.get('boost', 1))
 boost_pool = int(ARGUMENTS.get('boost_pool', 0))
 system_asio= int(ARGUMENTS.get('system_asio', 1))
 tests      = int(ARGUMENTS.get('tests', 1))
+# Run only tests which are known to be deterministic
 deterministic_tests = int(ARGUMENTS.get('deterministic_tests', 0))
+# Run all tests
+all_tests = int(ARGUMENTS.get('all_tests', 0))
 strict_build_flags = int(ARGUMENTS.get('strict_build_flags', 0))
+static_ssl = ARGUMENTS.get('static_ssl', None)
+install = ARGUMENTS.get('install', None)
 
-
-GALERA_VER = ARGUMENTS.get('version', '4.3')
+GALERA_VER = ARGUMENTS.get('version', '4.5')
 GALERA_REV = ARGUMENTS.get('revno', 'XXXX')
 
 # Attempt to read from file if not given
 if GALERA_REV == "XXXX" and os.path.isfile("GALERA_REVISION"):
-    f = open("GALERA_REVISION", "r")
-    try:
+    with open("GALERA_REVISION", "r") as f:
         GALERA_REV = f.readline().rstrip("\n")
-    finally:
-        f.close()
 
 # export to any module that might have use of those
 Export('GALERA_VER', 'GALERA_REV')
@@ -236,7 +233,7 @@ if sysname == 'freebsd' or sysname == 'sunos':
     env.Append(LIBPATH = ['/usr/local/lib'])
     env.Append(CPPPATH = ['/usr/local/include'])
 if sysname == 'sunos':
-    env.Replace(SHLINKFLAGS = '-shared ')
+   env.Replace(SHLINKFLAGS = '-shared ')
 
 # Add paths is extra_sysroot argument was specified
 extra_sysroot = ARGUMENTS.get('extra_sysroot', '')
@@ -281,9 +278,12 @@ if sysname != 'sunos':
 # static linking have beed addressed
 #
 #env.Prepend(LINKFLAGS = '-Wl,--warn-common -Wl,--fatal-warnings ')
+if int(asan):
+    env.Append(CCFLAGS = ' -fsanitize=address')
+    env.Append(LINKFLAGS = ' -fsanitize=address')
 
 if gcov:
-   env.Append(LINKFLAGS = '--coverage -g')
+    env.Append(LINKFLAGS = '--coverage -g')
 
 #
 # Check required headers and libraries (autoconf functionality)
@@ -554,7 +554,11 @@ if boost == 1:
     conf.env.Append(CPPFLAGS = ' -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG=1')
 
     # Common procedure to find boost static library
-    boost_libpaths = [ boost_library_path, '/usr/local/lib', '/usr/local/lib64', '/usr/lib', '/usr/lib64' ]
+    if bits == 64:
+        boost_libpaths = [ boost_library_path, '/usr/lib64', '/usr/local/lib64' ]
+    else:
+        boost_libpaths = [ boost_library_path, '/usr/local/lib', '/usr/lib' ]
+
     def check_boost_library(libBaseName, header, configuredLibPath, autoadd = 1):
         libName = libBaseName + boost_library_suffix
         if configuredLibPath != '' and not os.path.isfile(configuredLibPath):
@@ -631,12 +635,33 @@ if not conf.CheckCXXHeader('asio/ssl.hpp'):
     print('SSL support required but asio/ssl.hpp was not found or not usable')
     print('check that SSL devel headers are installed and usable')
     Exit(1)
-if not conf.CheckLib('ssl'):
-    print('SSL support required but libssl was not found')
-    Exit(1)
-if not conf.CheckLib('crypto'):
-    print('SSL support required libcrypto was not found')
-    Exit(1)
+
+def check_static_lib(path, libname):
+    fqfilename = path + "/lib" + libname + '.a'
+    if os.path.isfile(fqfilename):
+        conf.env.Append(LIBS = File(fqfilename))
+        return True
+    return False
+
+if static_ssl:
+    if not check_static_lib(static_ssl, "ssl"):
+        print("Static SSL linkage requested but ssl libary not found from {}"
+              .format(static_ssl))
+        Exit(1)
+    if not check_static_lib(static_ssl, "crypto"):
+        print("Static SSL requested but crypto libary not found from {}"
+              .format(static_ssl))
+        Exit(1)
+    conf.CheckLib('pthread')
+    conf.CheckLib('dl')
+    conf.env.Append(LDFLAGS = ' -static-libgcc')
+else:
+    if not conf.CheckLib('ssl'):
+        print('SSL support required but libssl was not found')
+        Exit(1)
+    if not conf.CheckLib('crypto'):
+        print('SSL support required libcrypto was not found')
+        Exit(1)
 
 # advanced SSL features
 if conf.CheckSetEcdhAuto():
@@ -655,6 +680,9 @@ if strict_build_flags == 1:
         # CXX may be something like "ccache clang++"
         if 'ccache' in conf.env['CXX'] or 'ccache' in conf.env['CC']:
             conf.env.Append(CCFLAGS = ' -Qunused-arguments')
+# Enable libstdc++ assertions in debug build.
+if int(debug) >= 0:
+    conf.env.Append(CXXFLAGS = " -D_GLIBCXX_ASSERTIONS")
 
 if conf.CheckWeffcpp():
     conf.env.Prepend(CXXFLAGS = '-Weffc++ ')
@@ -672,7 +700,7 @@ print('Global flags:')
 for f in ['CFLAGS', 'CXXFLAGS', 'CCFLAGS', 'CPPFLAGS']:
     print(f + ': ' + env[f].strip())
 
-Export('x86', 'bits', 'env', 'sysname', 'machine', 'libboost_program_options')
+Export('x86', 'bits', 'env', 'sysname', 'libboost_program_options', 'install')
 
 #
 # Actions to build .dSYM directories, containing debugging information for Darwin
@@ -760,7 +788,7 @@ Export('has_version_script galera_script')
 #
 if deterministic_tests:
    os.environ['GALERA_TEST_DETERMINISTIC'] = '1'
-
+Export('deterministic_tests all_tests')
 #
 # Run root SConscript with variant_dir
 #

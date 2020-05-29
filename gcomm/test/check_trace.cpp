@@ -25,6 +25,11 @@ struct CheckTraceConfInit
     }
 };
 
+extern "C" void check_trace_log_cb(int severity, const char* msg)
+{
+    std::cerr << gu::datetime::Date::monotonic() << ": " << msg << "\n";
+}
+
 // This is to avoid static initialization fiasco with gcomm::Conf static members
 // Ideally it is the latter which should be wrapped in a function, but, unless
 // this is used to initialize another static object, it should be fine.
@@ -264,6 +269,13 @@ void gcomm::PropagationMatrix::propagate_until_cvi(bool handle_timers)
         if (all_in == false && handle_timers == true)
         {
             expire_timers();
+        }
+        if (handle_timers)
+        {
+            // Assume that time progresses in millisecond intervals
+            // and that is fine enough granularity for all tests
+            // which deal with timers.
+            gu::datetime::SimClock::inc_time(gu::datetime::MSec);
         }
     }
     while (all_in == false);

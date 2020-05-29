@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2018 Codership Oy <info@codership.com>
+ * Copyright (C) 2010-2020 Codership Oy <info@codership.com>
  */
 
 #include "gcache_rb_store.hpp"
@@ -395,28 +395,25 @@ namespace gcache
 
         if (size_cache_ == size_free_) return;
 
-        /* Find the last seqno'd RB buffer. It is likely to be close to the
-         * end of released buffers chain. */
+        /* Invalidate seqnos for all ordered buffers (so that they can't be
+         * recovered on restart. Also find the last seqno'd RB buffer. */
         BufferHeader* bh(0);
 
-        for (seqno2ptr_t::reverse_iterator r(seqno2ptr_.rbegin());
-             r != seqno2ptr_.rend(); ++r)
+        for (seqno2ptr_t::iterator i(seqno2ptr_.begin());
+             i != seqno2ptr_.end(); ++i)
         {
-            BufferHeader* const b(ptr2BH(r->second));
+            BufferHeader* const b(ptr2BH(i->second));
             if (BUFFER_IN_RB == b->store)
             {
 #ifndef NDEBUG
                 if (!BH_is_released(b))
                 {
-                    log_fatal << "Buffer "
-                              << reinterpret_cast<const void*>(r->second)
-                              << ", seqno_g " << b->seqno_g
-                              << " is not released.";
+                    log_fatal << "Buffer " << b << " is not released.";
                     assert(0);
                 }
 #endif
+                b->seqno_g = SEQNO_NONE;
                 bh = b;
-                break;
             }
         }
 
@@ -1032,10 +1029,21 @@ namespace gcache
                 if (gu_likely(bh->size > 0))
                 {
                     total++;
-                    if (gu_unlikely(SEQNO_ILL == bh->seqno_g))
+
+                    if (gu_likely(bh->seqno_g > 0))
                     {
+                        free(bh); // on recovery no buffer is used
+                    }
+                    else
+                    {
+                        /* anything that is not ordered must be discarded */
+                        assert(SEQNO_NONE == bh->seqno_g ||
+                               SEQNO_ILL  == bh->seqno_g);
                         locked++;
+                        empty_buffer(bh);
                         discard(bh);
+                        size_used_ -= bh->size;
+                        // size_free_ is taken care of in discard()
                     }
 
                     bh = BH_next(bh);
@@ -1050,10 +1058,13 @@ namespace gcache
 
             progress.finish();
 
+            /* No buffers on recovery should be in used state */
+            assert(0 == size_used_);
+
             log_info << "GCache DEBUG: RingBuffer::recover(): found "
                      << locked << '/' << total << " locked buffers";
-            log_info << "GCache DEBUG: RingBuffer::recover(): used space: "
-                     << size_used_ << '/' << size_cache_;
+            log_info << "GCache DEBUG: RingBuffer::recover(): free space: "
+                     << size_free_ << '/' << size_cache_;
 
             assert_sizes();
         }

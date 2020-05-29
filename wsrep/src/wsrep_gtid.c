@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <limits.h>
 
 #include "wsrep_api.h"
 
@@ -30,20 +31,20 @@
 int
 wsrep_gtid_scan(const char* str, size_t str_len, wsrep_gtid_t* gtid)
 {
-    unsigned int offset;
+    int offset;
     char* endptr;
+    if (str_len > INT_MAX) return -EINVAL;
 
     if ((offset = wsrep_uuid_scan(str, str_len, &gtid->uuid)) > 0 &&
-        offset < str_len && str[offset] == ':') {
+        offset < (int)str_len && str[offset] == ':') {
         ++offset;
-        if (offset < str_len)
+        if (offset < (int)str_len)
         {
             errno = 0;
             gtid->seqno = strtoll(str + offset, &endptr, 0);
 
             if (errno == 0) {
-                offset = endptr - str;
-                return offset;
+                return (int)(endptr - str);
             }
         }
     }
@@ -59,12 +60,14 @@ wsrep_gtid_scan(const char* str, size_t str_len, wsrep_gtid_t* gtid)
 int
 wsrep_gtid_print(const wsrep_gtid_t* gtid, char* str, size_t str_len)
 {
-    unsigned int offset, ret;
+    int offset, ret;
+    if (str_len > INT_MAX) return -EINVAL;
+
     if ((offset = wsrep_uuid_print(&gtid->uuid, str, str_len)) > 0)
     {
-        ret = snprintf(str + offset, str_len - offset,
+        ret = snprintf(str + offset, (size_t)((int)str_len - offset),
                        ":%" PRId64, gtid->seqno);
-        if (ret <= str_len - offset) {
+        if (ret <= ((int)str_len - offset)) {
             return (offset + ret);
         }
 

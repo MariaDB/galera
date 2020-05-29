@@ -52,7 +52,7 @@ wsrep_uuid_scan (const char* str, size_t str_len, wsrep_uuid_t* uuid)
             uuid_len  += 2;
             uuid_offt += 1;
             if (sizeof (uuid->data) == uuid_offt)
-                return uuid_len;
+                return (int)uuid_len;
         }
         else {
             break;

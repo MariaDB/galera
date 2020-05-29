@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2018 Codership Oy <info@codership.com>
+// Copyright (C) 2018-2019 Codership Oy <info@codership.com>
 //
 
 #include <wsrep_api.h>
@@ -31,7 +31,7 @@ static const char* Defaults[] =
     "cert.log_conflicts",          "no",
     "cert.optimistic_pa",          "yes",
     "debug",                       "no",
-#ifndef NDEBUG
+#ifdef GU_DBUG_ON
     "dbug",                        "",
 #endif
     "evs.auto_evict",              "0",
@@ -103,11 +103,12 @@ static const char* Defaults[] =
     "repl.key_format",             "FLAT8",
     "repl.max_ws_size",            "2147483647",
     "repl.proto_max",              "10",
-#ifndef NDEBUG
+#ifdef GU_DBUG_ON
     "signal",                      "",
 #endif
     "socket.checksum",             "2",
-    "socket.recv_buf_size",        "212992",
+    "socket.recv_buf_size",        "auto",
+    "socket.send_buf_size",        "auto",
 //  "socket.ssl",                  no default,
 //  "socket.ssl_cert",             no default,
 //  "socket.ssl_cipher",           no default,

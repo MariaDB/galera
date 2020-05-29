@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2019 Codership Oy <info@codership.com>
  */
 
 /*!
@@ -17,7 +17,6 @@
 #include "gcomm/map.hpp"
 #include "gu_histogram.hpp"
 #include "gu_stats.hpp"
-#include "profile.hpp"
 
 #include "evs_seqno.hpp"
 #include "evs_node.hpp"
@@ -150,7 +149,15 @@ public:
     std::string stats() const;
     void reset_stats();
 
-    bool is_flow_control(const seqno_t, const seqno_t win) const;
+    // Return true if the message with seqno and given send window will
+    // cause flow control.
+    bool is_flow_control(const seqno_t seqno, const seqno_t win) const;
+    // Return true if sending the user message contained in dg
+    // should make all nodes to respond to the message. This happens
+    // if sending the datagram would cause some predefined (@todo name
+    // variable here) number of bytes to be exceeded without sending
+    // and user message without F_MSG_MORE flag.
+    bool request_user_msg_feedback(const gcomm::Datagram& dg) const;
     int send_user(Datagram&,
                   uint8_t,
                   Order,
@@ -161,11 +168,21 @@ public:
     size_t aggregate_len() const;
     int send_user(const seqno_t);
     void complete_user(const seqno_t);
-    int send_delegate(Datagram&);
+    int send_delegate(Datagram&, const UUID& target);
+    bool gap_rate_limit(const UUID&, const Range&) const;
+    // Send GAP message.
+    // @param range_uuid If non-nil, the gap message will contain request for
+    //                   retransmission of messages in given range.
+    // @param view_id View ID the gap message belongs to.
+    // @param range If non-empty denotes the range of messages to be resent
+    //              by the node with range_uuid
+    // @param commit If set, the gap informs that the node will commit to the
+    //               proposed view in previously received install message.
     void send_gap(EVS_CALLER_ARG,
-                  const UUID&, const ViewId&, const Range,
-                  bool commit = false, bool req_all = false);
+                  const UUID& range_uuid, const ViewId& view_id, const Range range,
+                  bool commit = false);
     const JoinMessage& create_join();
+    bool join_rate_limit() const;
     void send_join(bool tval = true);
     void set_join(const JoinMessage&, const UUID&);
     void set_leave(const LeaveMessage&, const UUID&);
@@ -176,7 +193,6 @@ public:
     void resend(const UUID&, const Range);
     void recover(const UUID&, const UUID&, const Range);
 
-    void retrans_user(const UUID&, const MessageNodeList&);
     void retrans_leaves(const MessageNodeList&);
 
     void set_inactive(const UUID&);
@@ -237,6 +253,27 @@ private:
     void check_nil_view_id();
     void asymmetry_elimination();
     void handle_foreign(const Message&);
+    void send_request_retrans_gap(const UUID& target, const UUID& origin,
+                                  const Range& range);
+    // Request retransmission of messages.
+    // @param target Target node to request messages from.
+    // @param origin Origin of the range of messages to request.
+    // @param range Seqno range to request
+    void request_retrans(const UUID& target, const UUID& origin,
+                         const Range& range);
+    // Request missing messages from nodes in the same view.
+    // This method should be used only during configuration changes,
+    // not in operational state.
+    void request_missing();
+    // Retrans messages which may be missing from some nodes. This method
+    // should used only during configuration changes, not in
+    // operational state.
+    void retrans_missing();
+    // Handle user message which has view id different from
+    // current view ID.
+    // @return True if the message must be processed
+    void handle_user_from_different_view(const Node& node,
+                                         const UserMessage& msg);
     void handle_user(const UserMessage&,
                      NodeMap::iterator,
                      const Datagram&);
@@ -386,16 +423,6 @@ private:
     long long int recovered_msgs_;
     std::vector<long long int> recvd_msgs_;
     std::vector<long long int> delivered_msgs_;
-    prof::Profile send_user_prof_;
-    prof::Profile send_gap_prof_;
-    prof::Profile send_join_prof_;
-    prof::Profile send_install_prof_;
-    prof::Profile send_leave_prof_;
-    prof::Profile consistent_prof_;
-    prof::Profile consensus_prof_;
-    prof::Profile shift_to_prof_;
-    prof::Profile input_map_prof_;
-    prof::Profile delivery_prof_;
     bool delivering_;
     UUID my_uuid_;
     SegmentId segment_;
@@ -447,7 +474,7 @@ private:
             user_type_(user_type),
             seqno_    (seqno    ),
             datagram_ (datagram ),
-            tstamp_   (gu::datetime::Date::now())
+            tstamp_   (gu::datetime::Date::monotonic())
         { }
         uint8_t             user_type() const { return user_type_; }
         seqno_t             seqno()     const { return seqno_    ; }
@@ -463,6 +490,8 @@ private:
     std::deque<CausalMessage> causal_queue_;
     // Consensus module
     Consensus consensus_;
+    // Last sent join tstamp
+    gu::datetime::Date last_sent_join_tstamp_;
     // Last received install message
     InstallMessage* install_message_;
     // Highest seen view id seqno
@@ -483,8 +512,68 @@ private:
     seqno_t send_window_;
     // User send window size
     seqno_t user_send_window_;
-    // Output message queue
-    std::deque<std::pair<Datagram, ProtoDownMeta> > output_;
+    // Bytes since the last user msg which will require feedback from
+    // other nodes (i.e. sent without F_MSG_MORE)
+    size_t bytes_since_request_user_msg_feedback_;
+    // Output message queue. Class implemented as a thin wrapper
+    // around std::deque<> with book keeping of outbound bytes.
+    class out_queue
+    {
+    public:
+        typedef std::deque<std::pair<Datagram, ProtoDownMeta> > queue_type;
+        typedef queue_type::const_iterator const_iterator;
+
+        out_queue()
+            : outbound_bytes_(),
+              queue_()
+        { }
+
+        bool empty() const
+        {
+            assert(outbound_bytes_ || queue_.empty());
+            return (outbound_bytes_ == 0);
+        }
+
+        void push_back(const queue_type::value_type& msg)
+        {
+            outbound_bytes_ += msg.first.len();
+            queue_.push_back(msg);
+        }
+
+        void pop_front()
+        {
+            assert(not queue_.empty());
+            assert(outbound_bytes_ >= queue_.front().first.len());
+            outbound_bytes_ -= queue_.front().first.len();
+            queue_.pop_front();
+        }
+
+        const queue_type::value_type& front() const
+        {
+            assert(not queue_.empty());
+            return queue_.front();
+        }
+
+        const_iterator begin() const { return queue_.begin(); }
+
+        const_iterator end() const { return queue_.end(); }
+
+        size_t size() const { return queue_.size(); }
+
+        void clear()
+        {
+            outbound_bytes_ = 0;
+            queue_.clear();
+        }
+
+        size_t outbound_bytes() const { return outbound_bytes_; }
+
+        static const size_t max_outbound_bytes = (size_t(1) << 20);
+    private:
+        size_t outbound_bytes_;
+        queue_type queue_;
+    } output_;
+
     std::vector<gu::byte_t> send_buf_;
     uint32_t max_output_size_;
     size_t mtu_;
@@ -506,7 +595,7 @@ private:
         DelayedEntry(const std::string& addr)
             :
             addr_      (addr),
-            tstamp_(gu::datetime::Date::now()),
+            tstamp_(gu::datetime::Date::monotonic()),
             state_(S_DELAYED),
             state_change_cnt_(1)
         { }

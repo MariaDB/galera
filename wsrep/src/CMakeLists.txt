@@ -17,6 +17,8 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 
 INCLUDE_DIRECTORIES(".")
 
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -Wconversion")
+
 SET(WSREP_SOURCES wsrep_gtid.c wsrep_uuid.c wsrep_loader.c wsrep_dummy.c)
 
 ADD_LIBRARY(wsrep ${WSREP_SOURCES})

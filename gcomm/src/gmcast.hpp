@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2019 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2020 Codership Oy <info@codership.com>
  */
 
 /*
@@ -64,6 +64,13 @@ namespace gcomm
             gu_throw_fatal << "gmcast transport listen not implemented";
         }
 
+        // Configured listen address
+        std::string configured_listen_addr() const
+        {
+            return listen_addr_;
+        }
+
+        // Listen adddress obtained from listening socket.
         std::string listen_addr() const
         {
             if (listener_ == 0)
@@ -111,6 +118,16 @@ namespace gcomm
                 max_retries_    (0)
             { }
 
+            AddrEntry(const AddrEntry& other)
+                :
+                uuid_(other.uuid_),
+                last_seen_(other.last_seen_),
+                next_reconnect_(other.next_reconnect_),
+                last_connect_(other.last_connect_),
+                retry_cnt_(other.retry_cnt_),
+                max_retries_(other.max_retries_)
+            { }
+
             const UUID& uuid() const { return uuid_; }
 
             void set_last_seen(const gu::datetime::Date& d) { last_seen_ = d; }
@@ -126,7 +143,7 @@ namespace gcomm
 
             void set_last_connect()
             {
-                last_connect_ = gu::datetime::Date::now();
+                last_connect_ = gu::datetime::Date::monotonic();
             }
 
             const gu::datetime::Date& last_connect() const
@@ -188,9 +205,22 @@ namespace gcomm
         bool              prim_view_reached_;
 
         gmcast::ProtoMap*  proto_map_;
-        std::set<Socket*>   relay_set_;
+        struct RelayEntry
+        {
+            gmcast::Proto* proto;
+            gcomm::Socket* socket;
+            RelayEntry(gmcast::Proto* p, gcomm::Socket* s)
+                : proto(p), socket(s) { }
+            bool operator<(const RelayEntry& other) const
+            {
+                return (socket < other.socket);
+            }
+        };
+        void send(const RelayEntry&, int segment, gcomm::Datagram& dg);
+        typedef std::set<RelayEntry> RelaySet;
+        RelaySet relay_set_;
 
-        typedef std::vector<Socket*> Segment;
+        typedef std::vector<RelayEntry> Segment;
         typedef std::map<uint8_t, Segment> SegmentMap;
         SegmentMap segment_map_;
         // self index in local segment when ordered by UUID
@@ -255,7 +285,7 @@ namespace gcomm
         void gmcast_forget(const gcomm::UUID&, const gu::datetime::Period&);
         // Handle proto entry that has established connection to remote host
         void handle_connected(gmcast::Proto*);
-        // Handle proto entry that has succesfully finished handshake
+        // Handle proto entry that has successfully finished handshake
         // sequence
         void handle_established(gmcast::Proto*);
         // Handle proto entry that has failed

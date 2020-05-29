@@ -131,7 +131,7 @@ void gcomm::AsioUdpSocket::close()
     state_ = S_CLOSED;
 }
 
-int gcomm::AsioUdpSocket::send(const Datagram& dg)
+int gcomm::AsioUdpSocket::send(int /* segment */, const Datagram& dg)
 {
     Critical<AsioProtonet> crit(net_);
     gu::array<asio::const_buffer, 3>::type cbs;
@@ -147,7 +147,7 @@ int gcomm::AsioUdpSocket::send(const Datagram& dg)
     cbs[0] = asio::const_buffer(buf, sizeof(buf));
     cbs[1] = asio::const_buffer(dg.header() + dg.header_offset(),
                           dg.header_len());
-    cbs[2] = asio::const_buffer(&dg.payload()[0], dg.payload().size());
+    cbs[2] = asio::const_buffer(dg.payload().data(), dg.payload().size());
     try
     {
         socket_.send_to(cbs, target_ep_);

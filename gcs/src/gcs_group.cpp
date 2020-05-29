@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2019 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2020 Codership Oy <info@codership.com>
  *
  * $Id$
  */
@@ -417,11 +417,11 @@ group_post_state_exchange (gcs_group_t* group)
             {
                 gu_fatal("Reversing history: %lld -> %lld, this member has "
                          "applied %lld more events than the primary component."
-                         "Data loss is possible. Aborting.",
+                         "Data loss is possible. Must abort.",
                          (long long)group->act_id_, (long long)quorum->act_id,
                          (long long)(group->act_id_ - quorum->act_id));
-                assert(0);
-                gu_abort();
+                group->state  = GCS_GROUP_INCONSISTENT;
+                return;
             }
             group->state      = GCS_GROUP_PRIMARY;
             group->act_id_    = quorum->act_id;
@@ -1189,20 +1189,20 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
             }
         }
         else {
-            if (sender_idx == peer_idx) {
-                if (GCS_NODE_STATE_JOINED == sender->status) {
-                    gu_info ("Member %d.%d (%s) resyncs itself to group",
-                             sender_idx, sender->segment, sender->name);
+            if (GCS_NODE_STATE_JOINED == sender->status) {
+                if (sender_idx == peer_idx) {
+                    gu_info("Member %d.%d (%s) resyncs itself to group.",
+                            sender_idx, sender->segment, sender->name);
                 }
                 else {
-                    assert(sender->desync_count > 0);
-                    return 0; // don't deliver up
+                    gu_info("%d.%d (%s): State transfer %s %d.%d (%s) complete.",
+                            sender_idx, sender->segment, sender->name, st_dir,
+                            peer_idx, peer ? peer->segment : -1, peer_name);
                 }
             }
             else {
-                gu_info ("%d.%d (%s): State transfer %s %d.%d (%s) complete.",
-                         sender_idx, sender->segment, sender->name, st_dir,
-                         peer_idx, peer ? peer->segment : -1, peer_name);
+                assert(sender->desync_count > 0);
+                return 0; // don't deliver up
             }
         }
     }
@@ -1820,16 +1820,27 @@ gcs_group_handle_state_request (gcs_group_t*         group,
         const char* joiner_status_string = gcs_node_state_to_str(joiner_status);
 
         if (group->my_idx == joiner_idx) {
-            gu_error ("Requesting state transfer while in %s. "
-                      "Ignoring.", joiner_status_string);
-            act->id = -ECANCELED;
+            if (joiner_status >= GCS_NODE_STATE_JOINED)
+            {
+                gu_warn ("Requesting state transfer while in %s. "
+                         "Ignoring.", joiner_status_string);
+                act->id = -ECANCELED;
+            }
+            else
+            {
+                /* The node can't send two STRs in a row */
+                assert(joiner_status == GCS_NODE_STATE_JOINER);
+                gu_fatal("Requesting state transfer while in %s. "
+                         "Internal program error.", joiner_status_string);
+                act->id = -ENOTRECOVERABLE;
+            }
             return act->act.buf_len;
         }
         else {
-            gu_error ("Member %d.%d (%s) requested state transfer, "
-                      "but its state is %s. Ignoring.",
-                      joiner_idx, group->nodes[joiner_idx].segment, joiner_name,
-                      joiner_status_string);
+            gu_warn ("Member %d.%d (%s) requested state transfer, "
+                     "but its state is %s. Ignoring.",
+                     joiner_idx, group->nodes[joiner_idx].segment, joiner_name,
+                     joiner_status_string);
             gcs_group_ignore_action (group, act);
             return 0;
         }
@@ -1896,12 +1907,12 @@ gcs_group_act_conf (gcs_group_t*         group,
                 conf.vote_res   = group->vote_result.res;
             }
         }
-        conf.seqno      = group->act_id_;
-    } else {
+    }
+    else {
         assert(GCS_GROUP_NON_PRIMARY == group->state);
-        conf.seqno      = GCS_SEQNO_ILL;
     }
 
+    conf.seqno          = group->act_id_;
     conf.conf_id        = group->conf_id;
     conf.repl_proto_ver = group->quorum.repl_proto_ver;
     conf.appl_proto_ver = group->quorum.appl_proto_ver;
