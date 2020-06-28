@@ -1,3 +1,9 @@
+galera-4 (26.4.5-1~bpo10+1) buster-backports; urgency=medium
+
+  * No-change backport to Debian Buster.
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 28 Jun 2020 19:22:00 +0300
+
 galera-4 (26.4.5-1) unstable; urgency=medium
 
   * New upstream version 26.4.5. This is the first official release for
