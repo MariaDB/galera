@@ -42,10 +42,10 @@ ifneq (,$(filter strict_build_flags,$(DEB_BUILD_OPTIONS)))
 	SCONS_ARGS += strict_build_flags=1
 endif
 
-# Some mipsel buildd's are a bit slow and fail tests if they are not
-# given enough time
-ifeq (mipsel,$(DEB_HOST_ARCH))
-        export CK_TIMEOUT_MULTIPLIER=2
+# Some mipsel Debian buildd's and riscv64 Launchpad builders are a bit
+# slow and fail tests if they are not given enough time
+ifneq (,$(filter $(DEB_HOST_ARCH),mipsel riscv64))
+	export CK_TIMEOUT_MULTIPLIER=2
 endif
 
 override_dh_auto_build:
