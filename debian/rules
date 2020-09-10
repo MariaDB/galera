@@ -27,12 +27,12 @@ endif
 
 # Tests are run by default sometimes, so explicitly enable or disable them
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-# Bus errors on arm64 kernels prevent running testsuite when building armhf
-ifeq (armhf,$(DEB_HOST_ARCH))
-	SCONS_ARGS += tests=0 deterministic_tests=0
-else
-	SCONS_ARGS += tests=1 deterministic_tests=1
-endif
+  # Bus errors on arm64 kernels prevent running testsuite when building armhf
+  ifeq (armhf,$(DEB_HOST_ARCH))
+	  SCONS_ARGS += tests=0 deterministic_tests=0
+  else
+	  SCONS_ARGS += tests=1 deterministic_tests=1
+  endif
 else
 	SCONS_ARGS += tests=0 deterministic_tests=0
 endif
@@ -42,11 +42,9 @@ ifneq (,$(filter strict_build_flags,$(DEB_BUILD_OPTIONS)))
 	SCONS_ARGS += strict_build_flags=1
 endif
 
-# Some mipsel Debian buildd's and riscv64 Launchpad builders are a bit
-# slow and fail tests if they are not given enough time
-ifneq (,$(filter $(DEB_HOST_ARCH),mipsel riscv64))
-	export CK_TIMEOUT_MULTIPLIER=2
-endif
+# Some builders (e.g. mipsel/Debian buildd, riscv64/Launchpad, reprotest/Salsa-CI)
+# are slow and fail tests if they are not given enough time, so always extend it
+export CK_TIMEOUT_MULTIPLIER=2
 
 override_dh_auto_build:
 	# Print build env info to help debug builds on different platforms
