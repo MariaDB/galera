@@ -1,13 +1,13 @@
-galera-4 (26.4.5-2) UNRELEASED; urgency=medium
-
-  [ Otto Kekäläinen ]
-  * Open new changelog entry. The final changelog will be generated
-    with 'gbp dch -avR' before release.
+galera-4 (26.4.5-2~exp1) experimental; urgency=medium
 
   [ Debian Janitor ]
   * Set upstream metadata fields: Bug-Submit, Repository.
 
- -- Otto Kekäläinen <otto@debian.org>  Sun, 28 Jun 2020 17:01:36 +0300
+  [ Otto Kekäläinen ]
+  * Apply the test timeout multiplier on all architectures
+  * Salsa-CI: Update to be compatible with latest master/salsa-ci.yml
+
+ -- Otto Kekäläinen <otto@debian.org>  Mon, 26 Oct 2020 19:32:30 +0200
 
 galera-4 (26.4.5-1) unstable; urgency=medium
 
