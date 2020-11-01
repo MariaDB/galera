@@ -1,4 +1,4 @@
-// Copyright (C) 2012 Codership Oy <info@codership.com>
+// Copyright (C) 2012-2020 Codership Oy <info@codership.com>
 
 // $Id$
 
@@ -7,6 +7,7 @@
 #include "../src/gu_mmh3.h"
 #include "../src/gu_log.h"
 #include "../src/gu_hexdump.h"
+#include "../src/gu_byteswap.h"
 
 /* This is to verify all tails plus block + all tails. Max block is 16 bytes */
 static const char test_input[] = "0123456789ABCDEF0123456789abcde";
@@ -28,7 +29,7 @@ test_output32[NUM_32_TESTS] =
     {{ 0xe1, 0xbe, 0x2d, 0xce }}  /* '0123456' */
 };
 
-typedef struct hash128 { uint8_t h[16]; } hash128_t;
+typedef union hash128 { uint8_t h[16]; uint64_t x[2]; } hash128_t;
 
 #define NUM_128_TESTS 32 /* 0 to 31 bytes */
 
@@ -129,15 +130,15 @@ START_TEST (gu_mmh32_test)
     uint32_t out;
 
     smhasher_verification (gu_mmh3_32, sizeof(out), &out);
-    fail_if (check (&smhasher_checks[0], &out, sizeof(out)),
-             "gu_mmh3_32 failed.");
+    ck_assert_msg(!check(&smhasher_checks[0], &out, sizeof(out)),
+                  "gu_mmh3_32 failed.");
 
     for (i = 0; i < NUM_32_TESTS; i++)
     {
         uint32_t res = gu_mmh32 (test_input, i);
         res = gu_le32(res);
-        fail_if(check (&test_output32[i], &res, sizeof(res)),
-                "gu_mmh32() failed at step %d",i);
+        ck_assert_msg(!check(&test_output32[i], &res, sizeof(res)),
+                      "gu_mmh32() failed at step %d",i);
     }
 }
 END_TEST
@@ -149,8 +150,8 @@ START_TEST (gu_mmh128_x86_test)
     uint32_t out32;
 
     smhasher_verification (gu_mmh3_x86_128, sizeof(hash128_t), &out32);
-    fail_if (check (&smhasher_checks[1], &out32, sizeof(out32)),
-             "gu_mmh3_x86_128 failed.");
+    ck_assert_msg(!check(&smhasher_checks[1], &out32, sizeof(out32)),
+                  "gu_mmh3_x86_128 failed.");
 
     for (i = 0; i < NUM_128_TESTS; i++)
     {
@@ -168,15 +169,15 @@ START_TEST (gu_mmh128_x64_test)
     uint32_t out32;
 
     smhasher_verification (gu_mmh3_x64_128, sizeof(hash128_t), &out32);
-    fail_if (check (&smhasher_checks[2], &out32, sizeof(out32)),
-             "gu_mmh3_x64_128 failed.");
+    ck_assert_msg(!check(&smhasher_checks[2], &out32, sizeof(out32)),
+                  "gu_mmh3_x64_128 failed.");
 
     for (i = 0; i < NUM_128_TESTS; i++)
     {
         hash128_t out;
         gu_mmh128 (test_input, i, &out);
-        fail_if(check (&test_output128[i], &out, sizeof(out)),
-                "gu_mmh128() failed at step %d", i);
+        ck_assert_msg(!check(&test_output128[i], &out, sizeof(out)),
+                      "gu_mmh128() failed at step %d", i);
     }
 }
 END_TEST
@@ -189,42 +190,42 @@ START_TEST (gu_mmh128_partial)
     gu_mmh128_init (&ctx);
     gu_mmh128_append (&ctx, test_input, 31);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[31], &part, sizeof(part)),
-            "gu_mmh128_get() failed at one go");
+    ck_assert_msg(!check(&test_output128[31], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at one go");
 
     gu_mmh128_init (&ctx);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[0], &part, sizeof(part)),
-            "gu_mmh128_get() failed at init");
+    ck_assert_msg(!check(&test_output128[0], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at init");
     gu_mmh128_append (&ctx, test_input + 0, 0);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[0], &part, sizeof(part)),
-            "gu_mmh128_get() failed at length %d", 0);
+    ck_assert_msg(!check(&test_output128[0], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at length %d", 0);
     gu_mmh128_append (&ctx, test_input + 0, 1);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[1], &part, sizeof(part)),
-            "gu_mmh128_get() failed at length %d", 1);
+    ck_assert_msg(!check(&test_output128[1], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at length %d", 1);
     gu_mmh128_append (&ctx, test_input + 1, 2);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[3], &part, sizeof(part)),
-            "gu_mmh128_get() failed at length %d", 3);
+    ck_assert_msg(!check(&test_output128[3], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at length %d", 3);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[3], &part, sizeof(part)),
-            "gu_mmh128_get() failed at length %d again", 3);
+    ck_assert_msg(!check(&test_output128[3], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at length %d again", 3);
     gu_mmh128_append (&ctx, test_input + 3, 20);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[23], &part, sizeof(part)),
-            "gu_mmh128_get() failed at length %d", 23);
+    ck_assert_msg(!check(&test_output128[23], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at length %d", 23);
     gu_mmh128_append (&ctx, test_input + 23, 0);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[23], &part, sizeof(part)),
-            "gu_mmh128_get() failed at length %d again", 23);
+    ck_assert_msg(!check(&test_output128[23], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at length %d again", 23);
     gu_mmh128_append (&ctx, test_input + 23, 3);
     gu_mmh128_append (&ctx, test_input + 26, 3);
     gu_mmh128_append (&ctx, test_input + 29, 2);
     gu_mmh128_get (&ctx, &part);
-    fail_if(check (&test_output128[31], &part, sizeof(part)),
-            "gu_mmh128_get() failed at length %d", 31);
+    ck_assert_msg(!check(&test_output128[31], &part, sizeof(part)),
+                  "gu_mmh128_get() failed at length %d", 31);
 }
 END_TEST
 
