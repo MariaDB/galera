@@ -1,4 +1,4 @@
-// Copyright (C) 2012 Codership Oy <info@codership.com>
+// Copyright (C) 2012-2020 Codership Oy <info@codership.com>
 
 /*!
  * Original Bob Jenkins' test implementation:
@@ -11,6 +11,8 @@
 
 #include "../src/gu_spooky.h"
 #include "../src/gu_hexdump.h"
+
+#include <inttypes.h>
 
 #define BUFSIZE 512
 static uint64_t const expected[BUFSIZE] = {
@@ -185,8 +187,8 @@ START_TEST (gu_spooky_test)
 
         if (res != expected[i])
         {
-            fail ("%d: expected: 0x%.8lX, found: 0x%.8lX",
-                  i, expected[i], res);
+            ck_abort_msg("%zu: expected: 0x%.8lX, found: 0x%.8" PRIX32,
+                         i, expected[i], res);
         }
     }
 }

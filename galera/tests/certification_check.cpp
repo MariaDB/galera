@@ -8,6 +8,7 @@
 #include "key_os.hpp"
 #include "GCache.hpp"
 #include "gu_config.hpp"
+#include "gu_inttypes.hpp"
 
 #include <check.h>
 
@@ -118,7 +119,7 @@ void run_wsinfo(const WSInfo* const wsi, size_t const nws, int const version)
 
         // serialize write set into gcache buffer
         gu::byte_t* buf(static_cast<gu::byte_t*>(env.gcache().malloc(size)));
-        fail_unless(out.serialize(buf, size) == size);
+        ck_assert(out.serialize(buf, size) == size);
 
 
         gcs_action act = {wsi[i].global_seqno,
@@ -128,15 +129,16 @@ void run_wsinfo(const WSInfo* const wsi, size_t const nws, int const version)
                           GCS_ACT_WRITESET};
         galera::TrxHandleSlavePtr ts(galera::TrxHandleSlave::New(false, sp),
                                      galera::TrxHandleSlaveDeleter());
-        fail_unless(ts->unserialize<true>(act) == size);
+        ck_assert(ts->unserialize<true>(act) == size);
 
         galera::Certification::TestResult result(cert.append_trx(ts));
-        fail_unless(result == wsi[i].result, "g: %lld res: %d exp: %d",
-                    ts->global_seqno(), result, wsi[i].result);
-        fail_unless(ts->depends_seqno() == wsi[i].expected_depends_seqno,
-                    "wsi: %zu g: %lld ld: %lld eld: %lld",
-                    i, ts->global_seqno(), ts->depends_seqno(),
-                    wsi[i].expected_depends_seqno);
+        ck_assert_msg(result == wsi[i].result,
+                      "g: %" PRId64 " res: %d exp: %d",
+                      ts->global_seqno(), result, wsi[i].result);
+        ck_assert_msg(ts->depends_seqno() == wsi[i].expected_depends_seqno,
+                      "wsi: %zu g: %" PRId64 " ld: %" PRId64 " eld: %" PRId64,
+                      i, ts->global_seqno(), ts->depends_seqno(),
+                      wsi[i].expected_depends_seqno);
         cert.set_trx_committed(*ts);
 
         if (ts->nbo_end() && ts->ends_nbo() != WSREP_SEQNO_UNDEFINED)
@@ -346,7 +348,7 @@ END_TEST
 START_TEST(test_certification_nbo)
 {
     log_info << "START: test_certification_nbo";
-    const int version(4);
+    const int version(galera::WriteSetNG::VER5);
     using galera::Certification;
     using galera::TrxHandle;
     using galera::void_cast;
@@ -390,7 +392,7 @@ START_TEST(test_certification_nbo)
           6, 6, 0, 5,
           TrxHandle::F_ISOLATION | TrxHandle::F_COMMIT,
           Certification::TEST_OK,
-          {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
+          {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0},
           24
         },
         // 7 should now succeed
@@ -398,7 +400,16 @@ START_TEST(test_certification_nbo)
           { {void_cast("1"), 1}, }, 1, false,
           7, 7, 0, 6,
           TrxHandle::F_ISOLATION | TrxHandle::F_BEGIN | TrxHandle::F_COMMIT,
-          Certification::TEST_OK, {0}, 0}
+          Certification::TEST_OK, {0}, 0},
+        // Complete seqno 5 to clean up
+        { { {2, } }, 8, 8,
+          { {void_cast("2"), 1}, }, 1, false,
+          8, 8, 0, 7,
+          TrxHandle::F_ISOLATION | TrxHandle::F_COMMIT,
+          Certification::TEST_OK,
+          {5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0},
+          24
+        }
     };
 
     size_t nws(sizeof(wsi)/sizeof(wsi[0]));
@@ -480,10 +491,10 @@ Suite* certification_suite()
 
     t = tcase_create("certification_nbo");
     tcase_add_test(t, test_certification_nbo);
+    suite_add_tcase(s, t);
 
     t = tcase_create("certification_commit_fragment");
     tcase_add_test(t, test_certification_commit_fragment);
-
     suite_add_tcase(s, t);
 
     return s;
