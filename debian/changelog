@@ -1,4 +1,4 @@
-galera-4 (26.4.5-2~exp1) experimental; urgency=medium
+galera-4 (26.4.6-1) unstable; urgency=medium
 
   [ Debian Janitor ]
   * Set upstream metadata fields: Bug-Submit, Repository.
@@ -6,8 +6,9 @@ galera-4 (26.4.5-2~exp1) experimental; urgency=medium
   [ Otto Kekäläinen ]
   * Apply the test timeout multiplier on all architectures
   * Salsa-CI: Update to be compatible with latest master/salsa-ci.yml
+  * New upstream version 26.4.6
 
- -- Otto Kekäläinen <otto@debian.org>  Mon, 26 Oct 2020 19:32:30 +0200
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 01 Nov 2020 20:48:05 +0200
 
 galera-4 (26.4.5-1) unstable; urgency=medium
 
