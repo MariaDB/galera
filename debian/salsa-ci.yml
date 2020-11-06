@@ -106,9 +106,11 @@ galera-3 stretch to galera-4 upgrade:
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
     # Install MariaDB built in this commit
     # Replace any old repos with just Sid
-    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
+    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list; apt-get update
     # Upgrade minimal stack first
-    - apt-get update; apt-get install -y apt
+    # Due to Bug#972552, libnss-nis fails with exit code 100, so install it here
+    # as a separate step that is safe to ignore
+    - apt-get install -y apt libnss-nis || true
     # Install MariaDB built in this commit
     - apt-get install -y ./*.deb
     # Verify installation of MariaDB built in this commit
