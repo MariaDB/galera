@@ -1,0 +1,23 @@
+Author: Otto Kekäläinen <otto@debian.org>
+Description: Don't allow Scons to guess the arch, as it will misdetect it as
+ x86_64 on the Salsa-CI builders and the i386 builds will fail.
+
+--- a/SConstruct
++++ b/SConstruct
+@@ -44,7 +44,15 @@ def read_first_line(cmd):
+     return line
+ 
+ sysname = os.uname()[0].lower()
+-machine = platform.machine()
++
++# Use host architecture is available as a deb build environment variable
++machine = os.environ.get('DEB_HOST_ARCH', None)
++
++# Reading arch from the running kernel can lead to the wrong value if build in a
++# container or when cross-compiling, so use this only as a fallback
++if machine == None:
++    machine = platform.machine()
++
+ bits = ARGUMENTS.get('bits', platform.architecture()[0])
+ print('Host: ' + sysname + ' ' + machine + ' ' + bits)
+ 
