@@ -1,3 +1,10 @@
+galera-4 (26.4.7-1) unstable; urgency=medium
+
+  * New upstream version 26.4.7
+  * Remove arm64 crc32 patch that was applied upstream
+
+ -- Otto Kekäläinen <otto@debian.org>  Thu, 28 Jan 2021 11:00:29 +0200
+
 galera-4 (26.4.6-1) unstable; urgency=medium
 
   [ Debian Janitor ]
