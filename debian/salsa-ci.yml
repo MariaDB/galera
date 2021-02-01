@@ -20,10 +20,11 @@ build buster-backports:
   variables:
     RELEASE: buster-backports
 
-build stretch-backports:
-  extends: .build-package
-  variables:
-    RELEASE: stretch-backports
+# Since SCons changed to CMake >= 3.8, that build dependency can no longer be satisfied on Stretch
+#build stretch-backports:
+#  extends: .build-package
+#  variables:
+#    RELEASE: stretch-backports
 
 # Reprotests started failing in January 2021 on Galera version that previously passed
 reprotest:
