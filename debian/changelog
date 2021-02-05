@@ -1,3 +1,13 @@
+galera-4 (26.4.7-2) unstable; urgency=medium
+
+  [ Helmut Grohne ]
+  * Fix new CMake definitions to correctly use CMAKE_OBJDUMP (Closes: #981652)
+
+  [ Otto Kekäläinen ]
+  * Backport atomics patch from upstream to fix multiple FTBFS
+
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 05 Feb 2021 12:24:44 +0200
+
 galera-4 (26.4.7-1) unstable; urgency=medium
 
   * New upstream version 26.4.7
