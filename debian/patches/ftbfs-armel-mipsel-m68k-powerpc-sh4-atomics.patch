@@ -1,0 +1,28 @@
+From: https://github.com/codership/galera-bugs/commit/efbb60cda56ddd4f8149c8527ef75c15b2340be9.patch
+From: Teemu Ollakka <teemu.ollakka@galeracluster.com>
+Date: Thu, 4 Feb 2021 09:16:31 +0200
+Subject: [PATCH] codership/galera#558 Check if libatomic is needed
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -11,6 +11,7 @@ include(CheckCXXCompilerFlag)
+ include(CheckIncludeFile)
+ include(CheckIncludeFileCXX)
+ include(CheckCXXCompilerFlag)
++include(CheckLibraryExists)
+ 
+ include_directories(
+   ${CMAKE_SOURCE_DIR}
+--- a/cmake/os.cmake
++++ b/cmake/os.cmake
+@@ -8,4 +8,10 @@ find_library(PTHREAD_LIB pthread)
+ find_library(RT_LIB rt)
+ set(GALERA_SYSTEM_LIBS ${PTHREAD_LIB} ${RT_LIB})
+ 
++check_library_exists(atomic _atomic_fetch_add_8 "" GALERA_HAVE_ATOMIC_LIB)
++if (GALERA_HAVE_ATOMIC_LIB)
++  find_library(ATOMIC_LIB atomic)
++  list(APPEND GALERA_SYSTEM_LIBS ${ATOMIC_LIB})
++endif()
++
+ message(STATUS "Galera system libs: ${GALERA_SYSTEM_LIBS}")
