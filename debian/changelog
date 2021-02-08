@@ -1,3 +1,9 @@
+galera-4 (26.4.7-3~exp1) experimental; urgency=medium
+
+  * Revised atomics patch to fix multiple FTBFS
+
+ -- Otto Kekäläinen <otto@debian.org>  Mon, 08 Feb 2021 21:24:01 +0200
+
 galera-4 (26.4.7-2) unstable; urgency=medium
 
   [ Helmut Grohne ]
