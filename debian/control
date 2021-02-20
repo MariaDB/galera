@@ -3,7 +3,7 @@ Maintainer: Debian MySQL Maintainers <pkg-mysql-maint@lists.alioth.debian.org>
 Uploaders: Otto Kekäläinen <otto@debian.org>
 Section: database
 Priority: optional
-Standards-Version: 4.5.0
+Standards-Version: 4.5.1
 Rules-Requires-Root: no
 Build-Depends: check,
                cmake (>= 2.8),
