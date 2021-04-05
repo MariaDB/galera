@@ -118,6 +118,7 @@ Suite *gcs_memb_suite(void)
     TCase *tcase = tcase_create("gcs_memb");
 
     suite_add_tcase (suite, tcase);
+    tcase_set_timeout(tcase, 120);
     tcase_add_test  (tcase, gcs_memb_test_465);
     return suite;
 }
