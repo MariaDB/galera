@@ -1,3 +1,9 @@
+galera-4 (26.4.8-1) UNRELEASED; urgency=medium
+
+  * Open new changelog entry. This will be replaced by 'gbp dch'.
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 22 May 2021 09:06:11 -0700
+
 galera-4 (26.4.7-3) unstable; urgency=medium
 
   * Revised atomics patch to fix multiple FTBFS
