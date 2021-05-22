@@ -19,9 +19,12 @@ INCLUDE_DIRECTORIES(".")
 
 SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -Wconversion")
 
+IF (NOT CMAKE_BUILD_TYPE)
+    SET(CMAKE_BUILD_TYPE Release)
+ENDIF()
+
 SET(WSREP_SOURCES wsrep_gtid.c wsrep_uuid.c wsrep_loader.c wsrep_dummy.c)
 
 ADD_LIBRARY(wsrep ${WSREP_SOURCES})
 
-#ADD_EXECUTABLE(listener wsrep_listener.c ${WSREP_SOURCES})
-#TARGET_LINK_LIBRARIES(listener ${LIBDL})
+ADD_SUBDIRECTORY(examples)
