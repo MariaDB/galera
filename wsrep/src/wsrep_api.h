@@ -586,7 +586,7 @@ wsrep_enc_direction_t;
  * @return          a number of bytes written to output or a negative error code.
  */
 typedef int (*wsrep_encrypt_cb_t)
-(   
+(
     void*                 app_ctx,
     wsrep_enc_ctx_t*      enc_ctx,
     const wsrep_buf_t*    input,
@@ -663,9 +663,10 @@ typedef struct wsrep_key
 } wsrep_key_t;
 
 /*! Key type:
- *  EXCLUSIVE conflicts with any key type
- *  SEMI      reserved. If not supported, should be interpreted as EXCLUSIVE
- *  SHARED    conflicts only with EXCLUSIVE keys */
+ *  SHARED    - higher level resource shared between clients, e.g. SQL table
+ *  REFERENCE - resource referenced but not modified, e.g. parent row
+ *  UPDATE    - resource is modified
+ *  EXCLUSIVE - resource is either created or deleted */
 typedef enum wsrep_key_type
 {
     WSREP_KEY_SHARED = 0,
@@ -802,9 +803,6 @@ struct wsrep_st {
   /*!
    * @brief Closes connection to cluster.
    *
-   * If state_uuid and/or state_seqno is not NULL, will store final state
-   * in there.
-   *
    * @param wsrep this  wsrep handler
    */
     wsrep_status_t (*disconnect)(wsrep_t* wsrep);
@@ -812,7 +810,8 @@ struct wsrep_st {
   /*!
    * @brief start receiving replication events
    *
-   * This function never returns
+   * This function does not return until provider is closed or \p exit_loop
+   * parameter to wsrep_apply_cb_t() is set to true.
    *
    * @param wsrep provider handle
    * @param recv_ctx receiver context
@@ -1001,8 +1000,10 @@ struct wsrep_st {
   /*!
    * @brief Appends data to transaction writeset
    *
-   * This method can be called any time before commit and it
-   * appends a number of data buffers to transaction writeset.
+   * This method can be called any time before certify() call and it appends
+   * a data buffer to the transaction writeset.
+   * Repeated calls of the method will result in direct buffer concatenation
+   * and all data will be passed as a single buffer to the apply callback.
    *
    * Both copy and unordered flags can be ignored by provider.
    *
@@ -1251,7 +1252,7 @@ struct wsrep_st {
     void (*stats_free) (wsrep_t* wsrep, struct wsrep_stats_var* var_array);
 
   /*!
-   * @brief Reset some stats variables to inital value, provider-dependent.
+   * @brief Reset some stats variables to initial value, provider-dependent.
    *
    * @param wsrep provider handle.
    */
@@ -1365,7 +1366,8 @@ struct wsrep_st {
 int wsrep_load(const char* spec, wsrep_t** hptr, wsrep_log_cb_t log_cb);
 
 /*!
- * @brief Unloads wsrep library and frees associated resources
+ * @brief Unloads the wsrep library. The application must call
+ * wsrep->free() before unload to release library side resources.
  *
  * @param hptr wsrep handler pointer
  */

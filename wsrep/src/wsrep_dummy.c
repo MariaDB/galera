@@ -43,6 +43,8 @@ typedef struct wsrep_dummy
 
 static void dummy_free(wsrep_t *w)
 {
+    if (!w->ctx) return;
+
     WSREP_DBUG_ENTER(w);
     if (WSREP_DUMMY(w)->options) {
         free(WSREP_DUMMY(w)->options);

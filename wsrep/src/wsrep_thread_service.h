@@ -37,10 +37,12 @@
  *
  * Version 1:
  *   int wsrep_init_thread_service_v1(wsrep_thread_service_v1_t*)
+ *   void wsrep_deinit_thread_service_v1().
  *
  * The application defined implementation must be initialized before
- * calling the initialization function and must stay functional
- * until the provider is unloaded.
+ * calling the provider initialization function via wsrep->init(). The
+ * deinitialization must be done via deinit function after the
+ * provider side resources have been released via wsrep->free().
  */
 
 #ifndef WSREP_THREAD_SERVICE_H
@@ -208,7 +210,7 @@ extern "C"
      *
      * @param Mutex to be locked.
      *
-     * @return Zero if mutex was succesfully locked.
+     * @return Zero if mutex was successfully locked.
      * @return EBUSY if the mutex could not be acquired because it was already
      *         locked.
      * @return Non-zero error code on any other error.
@@ -343,7 +345,11 @@ extern "C"
 #ifdef __cplusplus
 }
 
-#define WSREP_THREAD_SERVICE_INIT_FUNC "wsrep_init_thread_service_v1"
+#define WSREP_THREAD_SERVICE_INIT_FUNC_V1 "wsrep_init_thread_service_v1"
+#define WSREP_THREAD_SERVICE_DEINIT_FUNC_V1 "wsrep_deinit_thread_service_v1"
+
+/* For backwards compatibility. */
+#define WSREP_THREAD_SERVICE_INIT_FUNC WSREP_THREAD_SERVICE_INIT_FUNC_V1
 
 #endif /* __cplusplus */
 #endif /* WSREP_THREAD_SERVICE_H */

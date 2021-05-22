@@ -85,7 +85,7 @@ sst_request_cb (void*             app_ctx __attribute__((unused)),
     if (*sst_req)
         *sst_req_len = strlen(*sst_req) + 1;
     else
-        *sst_req_len = -ENOMEM;
+        *sst_req_len = 0;
 
     return WSREP_CB_SUCCESS;
 }
@@ -163,18 +163,19 @@ graceful_leave (int signum)
     wsrep->disconnect(wsrep);
 }
 
-int main (int argc, char* argv[])
+int main (int const argc, char* argv[])
 {
-    if (argc != 4)
+    if (argc < 4 || argc > 5)
     {
         fprintf (stderr, "Usage: %s </path/to/wsrep/provider> <wsrep URI> "
-                 "<cluster name>\n", argv[0]);
+                 "<cluster name> [own address]\n", argv[0]);
         exit (EXIT_FAILURE);
     }
 
     const char* const wsrep_provider = argv[1];
     const char* const wsrep_uri      = argv[2];
     const char* const cluster_name   = argv[3];
+    const char* const own_address    = argc == 5 ? argv[4] : "localhost";
 
     /* Now let's load and initialize provider */
     wsrep_status_t rc = wsrep_load (wsrep_provider, &wsrep, logger_cb);
@@ -192,7 +193,7 @@ int main (int argc, char* argv[])
         .app_ctx       = &global_ctx,
 
         .node_name     = "example listener",
-        .node_address  = "",
+        .node_address  = own_address,
         .node_incoming = "",
         .data_dir      = ".", // working directory
         .options       = "",
@@ -219,11 +220,15 @@ int main (int argc, char* argv[])
     }
 
     /* Connect to cluster */
-    rc = wsrep->connect (wsrep, cluster_name, wsrep_uri, "", 0);
+    rc = wsrep->connect(wsrep, cluster_name, wsrep_uri, "", 0);
     if (0 != rc)
     {
-        fprintf (stderr,
-                 "wsrep::connect() failed: %d (%s)\n", rc, strerror(-rc));
+        if (rc < 0)
+            fprintf (stderr, "wsrep::connect(%s, %s) failed: %d (%s)\n",
+                     cluster_name, wsrep_uri, rc, strerror(-(int)rc));
+        else
+            fprintf (stderr, "wsrep::connect() failed: %d\n", rc);
+
         exit (EXIT_FAILURE);
     }
 

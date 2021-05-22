@@ -1,3 +1,4 @@
+import os
 
 Import('check_env', 'crc32c_cppflags')
 
@@ -36,6 +37,11 @@ gu_tests_objs = env.SharedObject(gu_tests_srcs)
 crc32c_env = env.Clone()
 crc32c_env.Append(CPPFLAGS = crc32c_cppflags)
 crc32c_objs = crc32c_env.SharedObject(['gu_crc32c_test.c'])
+
+# Path to certificates used in SSL tests.
+asio_test_cert_dir = '\\"' + Dir('#').abspath + '/tests/conf' + '\\"'
+env.Append(CPPFLAGS = ' -DGU_ASIO_TEST_CERT_DIR=' + asio_test_cert_dir)
+
 
 gu_tests = env.Program(target = 'gu_tests',
                        source = gu_tests_objs + crc32c_objs)
@@ -85,8 +91,8 @@ avalanche = env.Program(target = 'avalanche',
                          '''))
 Import('all_tests')
 if all_tests:
-    env.Test("go_to_test.passed", gu_to_test)
-    env.Test("avalance.passed", avalanche)
+    env.Test("gu_to_test.passed", gu_to_test)
+    env.Test("avalanche.passed", avalanche)
 
 # copy_vs_assignment = env.Program(target = 'copy_vs_assignment',
 #                         source = Split('''

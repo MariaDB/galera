@@ -15,9 +15,13 @@
 # Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston
 # MA  02110-1301  USA.
 
+# If without_crypto == 1, the library will be built without
+# SSL/TLS support.
+%{!?without_crypto: %global without_crypto 0}
+
 %define name galera-4
 %define wsrep_api 26
-%{!?version: %define version 26.4.7}
+%{!?version: %define version 26.4.8}
 %{!?release: %define release 1}
 %define copyright Copyright 2007-2020 Codership Oy. All rights reserved. Use is subject to license terms under GPLv2 license.
 %define libs %{_libdir}/%{name}
@@ -178,7 +182,11 @@ export CXX=g++-4.7
 
 NUM_JOBS=${NUM_JOBS:-$(ncpu=$(cat /proc/cpuinfo | grep processor | wc -l) && echo $(($ncpu > 4 ? 4 : $ncpu)))}
 
-cmake -DCMAKE_BUILD_TYPE=Release .
+%if 0%{?without_crypto}
+%define crypto_opt -DGALERA_WITH_SSL:BOOL=OFF
+%endif
+
+cmake -DCMAKE_BUILD_TYPE=Release %{?crypto_opt} .
 make -j$(echo $NUM_JOBS) VERBOSE=1
 make test ARGS=-V
 
