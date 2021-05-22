@@ -58,11 +58,11 @@ galera-4.x to galera-4.y upgrade:
     - *test-prepare-container
     # Install almost everything currently in Debian Buster
     - apt-get install -y galera-4 galera-arbitrator-4
-    # Verify installation of MariaDB from Buster
+    # Verify installation of Galera from Buster
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
     # Install MariaDB built in this commit
     - apt-get install -y ./*.deb
-    # Verify installation of MariaDB built in this commit
+    # Verify installation of Galera built in this commit
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
   variables:
     GIT_STRATEGY: none
@@ -80,16 +80,16 @@ galera-3 buster to galera-4 upgrade:
     - *test-prepare-container
     # Install almost everything currently in Debian Buster
     - apt-get install -y 'galera-*'
-    # Verify installation of MariaDB from Buster
+    # Verify installation of Galera from Buster
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
-    # Install MariaDB built in this commit
+    # Install Galera built in this commit
     # Replace any old repos with just Sid
     - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
     # Upgrade minimal stack first
     - apt-get update; apt-get install -y apt
     # Install MariaDB built in this commit
     - apt-get install -y ./*.deb
-    # Verify installation of MariaDB built in this commit
+    # Verify installation of Galera built in this commit
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
   variables:
     GIT_STRATEGY: none
@@ -107,9 +107,9 @@ galera-3 stretch to galera-4 upgrade:
     - *test-prepare-container
     # Install almost everything currently in Debian Buster
     - apt-get install -y 'galera-*'
-    # Verify installation of MariaDB from Buster
+    # Verify installation of Galera from Buster
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
-    # Install MariaDB built in this commit
+    # Install Galera built in this commit
     # Replace any old repos with just Sid
     - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list; apt-get update
     # Upgrade minimal stack first
@@ -118,8 +118,43 @@ galera-3 stretch to galera-4 upgrade:
     - apt-get install -y apt libnss-nis || true
     # Install MariaDB built in this commit
     - apt-get install -y ./*.deb
-    # Verify installation of MariaDB built in this commit
+    # Verify installation of Galera built in this commit
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+  variables:
+    GIT_STRATEGY: none
+  except:
+    variables:
+      - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
+
+mariadb-10.3 buster dist-upgrade:
+  stage: upgrade from Buster/Stretch
+  needs:
+    - job: build
+      artifacts: true
+  image: debian:buster
+  script:
+    - *test-prepare-container
+    # Install almost everything Galera currently in Debian Buster
+    # and the MariaDB Server 10.3 which uses Galera
+    - apt-get install -y 'galera-*' mariadb-server
+    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+    # Verify MariaDB is running and Galera plugin is visible
+    - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
+    # Add newly built packages as repository
+    - apt-get install -y apt-utils
+    - apt-ftparchive packages . > Packages
+    - echo "deb [trusted=yes] file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
+    # Replace any old repos with just Sid
+    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list; apt-get update
+    # Start with regular upgrade
+    - apt-get upgrade -y # mysql-common and mariadb-common upgrade
+    # Verify server still works
+    - /etc/init.d/mysql restart && sleep 10 && mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
+    # Upgrade to Galera built in this commit via dist-upgrade
+    - apt-get dist-upgrade -y
+    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+    # Verify MariaDB is running and Galera plugin is visible
+    - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
   variables:
     GIT_STRATEGY: none
   except:
