@@ -1,8 +1,14 @@
-galera-4 (26.4.8-1) UNRELEASED; urgency=medium
+galera-4 (26.4.8-1) unstable; urgency=medium
 
-  * Open new changelog entry. This will be replaced by 'gbp dch'.
+  * New upstream release 26.4.8
+  * Remove patches applied upstream
+  * Drop SConstruct patch for i386 as SCons is not used for builds anymore
+  * Bugfix: Don't uninstall MariaDB on Galera 3 to 4 upgrade (Closes: #988089)
+    This ensures the Buster installs of mariadb-server-10.3 (that depend on
+    galera-3) correctly upgrade to Bullseye installs of mariadb-server-10.5
+    (that depend on galera-4).
 
- -- Otto Kekäläinen <otto@debian.org>  Sat, 22 May 2021 09:06:11 -0700
+ -- Otto Kekäläinen <otto@debian.org>  Tue, 25 May 2021 20:38:32 -0700
 
 galera-4 (26.4.7-3) unstable; urgency=medium
 
