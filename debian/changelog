@@ -1,4 +1,4 @@
-galera-4 (26.4.9-1) unstable; urgency=medium
+galera-4 (26.4.9-0+deb11u1) bullseye; urgency=medium
 
   [ Otto Kekäläinen ]
   * New upstream release 26.4.9. Includes multiple bug fixes, see
@@ -10,7 +10,7 @@ galera-4 (26.4.9-1) unstable; urgency=medium
   * Solve circular Conflicts with galera-3 by no longer providing a virtual
     galera package (Closes: #990708)
 
- -- Otto Kekäläinen <otto@debian.org>  Wed, 28 Jul 2021 08:45:27 -0700
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 29 Aug 2021 20:05:11 -0700
 
 galera-4 (26.4.8-1) unstable; urgency=medium
 
