@@ -6,13 +6,14 @@ include:
 variables:
   SALSA_CI_DISABLE_MISSING_BREAKS: 0
   SALSA_CI_DISABLE_RC_BUGS: 0
+  RELEASE: 'bullseye'
 
 stages:
   - provisioning
   - build
   - test # Stage referenced by Salsa-CI template reprotest stanza, so must exist
   - publish # Stage referenced by Salsa-CI template aptly stanza, so must exist even though not used
-  - upgrade in Sid
+  - upgrade in Bullseye
   - upgrade from Buster/Stretch
 
 build buster-backports:
@@ -44,11 +45,11 @@ reprotest:
 
 # In addition to Salsa-CI, also run these fully Galera specific build jobs
 galera-4.x to galera-4.y upgrade:
-  stage: upgrade in Sid
+  stage: upgrade in Bullseye
   needs:
     - job: build
       artifacts: true
-  image: debian:sid
+  image: debian:bullseye
   artifacts:
     when: always
     name: "$CI_BUILD_NAME"
@@ -83,8 +84,8 @@ galera-3 buster to galera-4 upgrade:
     # Verify installation of Galera from Buster
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
     # Install Galera built in this commit
-    # Replace any old repos with just Sid
-    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
+    # Replace any old repos with just Bullseye
+    - echo 'deb http://deb.debian.org/debian bullseye main' > /etc/apt/sources.list
     # Upgrade minimal stack first
     - apt-get update; apt-get install -y apt
     # Install MariaDB built in this commit
@@ -110,8 +111,8 @@ galera-3 stretch to galera-4 upgrade:
     # Verify installation of Galera from Buster
     - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
     # Install Galera built in this commit
-    # Replace any old repos with just Sid
-    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list; apt-get update
+    # Replace any old repos with just Bullseye
+    - echo 'deb http://deb.debian.org/debian bullseye main' > /etc/apt/sources.list; apt-get update
     # Upgrade minimal stack first
     # Due to Bug#972552, libnss-nis fails with exit code 100, so install it here
     # as a separate step that is safe to ignore
@@ -144,8 +145,8 @@ mariadb-10.3 buster dist-upgrade:
     - apt-get install -y apt-utils
     - apt-ftparchive packages . > Packages
     - echo "deb [trusted=yes] file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
-    # Replace any old repos with just Sid
-    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list; apt-get update
+    # Replace any old repos with just Bullseye
+    - echo 'deb http://deb.debian.org/debian bullseye main' > /etc/apt/sources.list; apt-get update
     # Start with regular upgrade
     - apt-get upgrade -y # mysql-common and mariadb-common upgrade
     # Verify server still works
