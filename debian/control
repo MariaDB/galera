@@ -20,9 +20,7 @@ Architecture: any
 Section: libs
 Depends: ${misc:Depends},
          ${shlibs:Depends}
-Conflicts: galera,
-           galera-3,
-           garbd-2,
+Conflicts: garbd-2,
            garbd-3,
            garbd2,
            garbd3,
@@ -34,13 +32,11 @@ Conflicts: galera,
            percona-xtradb-cluster-galera-4.x,
            percona-xtradb-cluster-garbd-2.x,
            percona-xtradb-cluster-garbd-3.x
-Provides: galera,
-          galera4,
+Provides: galera4,
           percona-xtradb-cluster-galera-26,
           wsrep
-Breaks: galera,
-        galera-3
-Replaces: galera
+Breaks: galera-3 (<< 26.4)
+Replaces: galera-3 (<< 26.4)
 Description: Replication framework for transactional applications
  Galera is a fast synchronous multimaster wsrep provider (replication engine)
  for transactional databases and similar applications. For more information

@@ -1,3 +1,17 @@
+galera-4 (26.4.9-0+deb11u1) bullseye; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * New upstream release 26.4.9. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.9.txt
+  * Restore CK_TIMEOUT_MULTIPLIER in debian rules to avoid unnecassary
+    test failures due to slow builders
+
+  [ Andreas Beckmann ]
+  * Solve circular Conflicts with galera-3 by no longer providing a virtual
+    galera package (Closes: #990708)
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 29 Aug 2021 20:05:11 -0700
+
 galera-4 (26.4.8-1) unstable; urgency=medium
 
   * New upstream release 26.4.8
