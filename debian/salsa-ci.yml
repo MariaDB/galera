@@ -1,7 +1,8 @@
+---
 # Inlude Salsa-CI as a base
 include:
- - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
- - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
 
 variables:
   SALSA_CI_DISABLE_MISSING_BREAKS: 0
@@ -10,10 +11,15 @@ variables:
 stages:
   - provisioning
   - build
-  - test # Stage referenced by Salsa-CI template reprotest stanza, so must exist
-  - publish # Stage referenced by Salsa-CI template aptly stanza, so must exist even though not used
+  - test  # Stage referenced by Salsa-CI template reprotest stanza, so must exist
+  - publish  # Stage referenced by Salsa-CI template aptly stanza, so must exist even though not used
   - upgrade in Sid
-  - upgrade from Buster/Stretch
+  - upgrade from Bullseye/Buster/Stretch
+
+build bullseye-backports:
+  extends: .build-package
+  variables:
+    RELEASE: bullseye-backports
 
 build buster-backports:
   extends: .build-package
@@ -21,14 +27,10 @@ build buster-backports:
     RELEASE: buster-backports
 
 # Since SCons changed to CMake >= 3.8, that build dependency can no longer be satisfied on Stretch
-#build stretch-backports:
+# build stretch-backports:
 #  extends: .build-package
 #  variables:
 #    RELEASE: stretch-backports
-
-# Reprotests started failing in January 2021 on Galera version that previously passed
-reprotest:
-  allow_failure: true
 
 # Define snippets used to construct jobs
 .test-prepare-container: &test-prepare-container |
@@ -41,6 +43,21 @@ reprotest:
   echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
   # Prime the apt cache so later apt commands can run
   apt-get update
+
+.test-enable-sid-repos: &test-enable-sid-repos |
+  # Replace any old repos with just Sid
+  echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
+  # Upgrade minimal stack first
+  apt-get update
+  apt-get install -y apt
+
+.test-upgrade: &test-upgrade |
+  # List everything installed before upgrade
+  dpkg -l | grep -iE 'maria|mysql|galera'
+  # Install Galera built in this commit
+  apt-get install -y ./*.deb
+  # Verify installation of Galera built in this commit
+  dpkg -l | grep -iE 'maria|mysql|galera' # List installed
 
 # In addition to Salsa-CI, also run these fully Galera specific build jobs
 galera-4.x to galera-4.y upgrade:
@@ -56,14 +73,60 @@ galera-4.x to galera-4.y upgrade:
       - ${WORKING_DIR}/debug
   script:
     - *test-prepare-container
-    # Install almost everything currently in Debian Buster
-    - apt-get install -y galera-4 galera-arbitrator-4
-    # Verify installation of Galera from Buster
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
-    # Install MariaDB built in this commit
-    - apt-get install -y ./*.deb
-    # Verify installation of Galera built in this commit
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+    - apt-get install -y 'galera-*-4'
+    - *test-upgrade
+  variables:
+    GIT_STRATEGY: none
+  except:
+    variables:
+      - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
+
+galera-3.x to galera-4.y upgrade:
+  stage: upgrade in Sid
+  needs:
+    - job: build
+  image: debian:sid
+  artifacts:
+    when: always
+    name: "$CI_BUILD_NAME"
+    paths:
+      - ${WORKING_DIR}/debug
+  script:
+    - *test-prepare-container
+    - apt-get install -y 'galera-*-3'
+    - *test-upgrade
+  variables:
+    GIT_STRATEGY: none
+  except:
+    variables:
+      - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
+
+galera-4 bullseye to galera-4 upgrade:
+  stage: upgrade from Bullseye/Buster/Stretch
+  needs:
+    - job: build
+  image: debian:bullseye
+  script:
+    - *test-prepare-container
+    - apt-get install -y 'galera-*-4'
+    - *test-enable-sid-repos
+    - *test-upgrade
+  variables:
+    GIT_STRATEGY: none
+  except:
+    variables:
+      - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
+
+galera-3 bullseye to galera-4 upgrade:
+  stage: upgrade from Bullseye/Buster/Stretch
+  needs:
+    - job: build
+  image: debian:bullseye
+  script:
+    - *test-prepare-container
+    - apt-get install -y 'galera-*-3'
+    - *test-enable-sid-repos
+    - *test-upgrade
   variables:
     GIT_STRATEGY: none
   except:
@@ -71,55 +134,66 @@ galera-4.x to galera-4.y upgrade:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
 
 galera-3 buster to galera-4 upgrade:
-  stage: upgrade from Buster/Stretch
+  stage: upgrade from Bullseye/Buster/Stretch
   needs:
     - job: build
-      artifacts: true
   image: debian:buster
   script:
     - *test-prepare-container
-    # Install almost everything currently in Debian Buster
     - apt-get install -y 'galera-*'
-    # Verify installation of Galera from Buster
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
-    # Install Galera built in this commit
-    # Replace any old repos with just Sid
-    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
-    # Upgrade minimal stack first
-    - apt-get update; apt-get install -y apt
-    # Install MariaDB built in this commit
-    - apt-get install -y ./*.deb
-    # Verify installation of Galera built in this commit
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+    - *test-enable-sid-repos
+    - *test-upgrade
   variables:
     GIT_STRATEGY: none
   except:
     variables:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
+  allow_failure: true  # Bug#993755: libcrypt.so.1 upgrade broken from Stretch/Buster to Bookworm
 
 galera-3 stretch to galera-4 upgrade:
-  stage: upgrade from Buster/Stretch
+  stage: upgrade from Bullseye/Buster/Stretch
   needs:
     - job: build
-      artifacts: true
   image: debian:stretch
   script:
     - *test-prepare-container
-    # Install almost everything currently in Debian Buster
     - apt-get install -y 'galera-*'
-    # Verify installation of Galera from Buster
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
-    # Install Galera built in this commit
-    # Replace any old repos with just Sid
-    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list; apt-get update
-    # Upgrade minimal stack first
-    # Due to Bug#972552, libnss-nis fails with exit code 100, so install it here
-    # as a separate step that is safe to ignore
-    - apt-get install -y apt libnss-nis || true
-    # Install MariaDB built in this commit
-    - apt-get install -y ./*.deb
-    # Verify installation of Galera built in this commit
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+    - *test-enable-sid-repos
+    - *test-upgrade
+  variables:
+    GIT_STRATEGY: none
+  except:
+    variables:
+      - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
+  allow_failure: true  # Bug#993755: libcrypt.so.1 upgrade broken from Stretch/Buster to Bookworm
+
+mariadb-10.5 bullseye dist-upgrade:
+  stage: upgrade from Bullseye/Buster/Stretch
+  needs:
+    - job: build
+  image: debian:bullseye
+  script:
+    - *test-prepare-container
+    # Install almost everything Galera currently in Debian Bullseye
+    # and the MariaDB Server 10.5 which uses Galera
+    - apt-get install -y 'galera-*-4' mariadb-server
+    - dpkg -l | grep -iE 'maria|mysql|galera'  # List installed
+    # Verify MariaDB is running and Galera plugin is visible
+    - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
+    # Add newly built packages as repository
+    - apt-get install -y apt-utils
+    - apt-ftparchive packages . > Packages
+    - echo "deb [trusted=yes] file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
+    - *test-enable-sid-repos
+    # Start with regular upgrade
+    - apt-get upgrade -y  # mysql-common and mariadb-common upgrade
+    # Verify server still works
+    - /etc/init.d/mysql restart && sleep 10 && mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
+    # Upgrade to Galera built in this commit via dist-upgrade
+    - apt-get dist-upgrade -y
+    - dpkg -l | grep -iE 'maria|mysql|galera'   # List installed
+    # Verify MariaDB is running and Galera plugin is visible
+    - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
   variables:
     GIT_STRATEGY: none
   except:
@@ -127,32 +201,30 @@ galera-3 stretch to galera-4 upgrade:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
 
 mariadb-10.3 buster dist-upgrade:
-  stage: upgrade from Buster/Stretch
+  stage: upgrade from Bullseye/Buster/Stretch
   needs:
     - job: build
-      artifacts: true
   image: debian:buster
   script:
     - *test-prepare-container
     # Install almost everything Galera currently in Debian Buster
     # and the MariaDB Server 10.3 which uses Galera
     - apt-get install -y 'galera-*' mariadb-server
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+    - dpkg -l | grep -iE 'maria|mysql|galera'  # List installed
     # Verify MariaDB is running and Galera plugin is visible
     - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
     # Add newly built packages as repository
     - apt-get install -y apt-utils
     - apt-ftparchive packages . > Packages
     - echo "deb [trusted=yes] file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
-    # Replace any old repos with just Sid
-    - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list; apt-get update
+    - *test-enable-sid-repos
     # Start with regular upgrade
-    - apt-get upgrade -y # mysql-common and mariadb-common upgrade
+    - apt-get upgrade -y  # mysql-common and mariadb-common upgrade
     # Verify server still works
     - /etc/init.d/mysql restart && sleep 10 && mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
     # Upgrade to Galera built in this commit via dist-upgrade
     - apt-get dist-upgrade -y
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+    - dpkg -l | grep -iE 'maria|mysql|galera'  # List installed
     # Verify MariaDB is running and Galera plugin is visible
     - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
   variables:
@@ -160,3 +232,4 @@ mariadb-10.3 buster dist-upgrade:
   except:
     variables:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
+  allow_failure: true  # Bug#993755: libcrypt.so.1 upgrade broken from Stretch/Buster to Bookworm
