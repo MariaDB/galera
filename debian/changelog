@@ -1,3 +1,10 @@
+galera-4 (26.4.10-1) UNRELEASED; urgency=medium
+
+  * New upstream release 26.4.10. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.10.txt
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 20 Feb 2022 00:26:07 -0800
+
 galera-4 (26.4.9-1) unstable; urgency=medium
 
   [ Otto Kekäläinen ]
