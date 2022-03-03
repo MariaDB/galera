@@ -1,9 +1,10 @@
 //
-// Copyright (C) 2010-2017 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2021 Codership Oy <info@codership.com>
 //
 
 #include "key_data.hpp"
 #include "gu_serialize.hpp"
+#include "gu_asio.hpp" //  // gu::init_allowlist_service_v1()
 
 #if defined(GALERA_MULTIMASTER)
 #include "replicator_smm.hpp"
@@ -13,6 +14,7 @@
 #endif
 
 #include "wsrep_params.hpp"
+#include "event_service.hpp"
 
 #include <cassert>
 
@@ -834,6 +836,9 @@ wsrep_status_t galera_release(wsrep_t*            gh,
     assert(gh != 0);
     assert(gh->ctx != 0);
 
+    // A trx object was not created for this handle
+    if (not ws_handle->opaque) return WSREP_OK;
+
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
     TrxHandleMaster* txp(get_local_trx(repl, ws_handle, false));
 
@@ -1634,4 +1639,26 @@ int wsrep_loader(wsrep_t *hptr)
     }
 
     return WSREP_OK;
+}
+
+extern "C"
+int wsrep_init_allowlist_service_v1(wsrep_allowlist_service_v1_t *allowlist_service)
+{
+    return gu::init_allowlist_service_v1(allowlist_service);
+}
+
+extern "C" void wsrep_deinit_allowlist_service_v1()
+{
+    gu::deinit_allowlist_service_v1();
+}
+
+extern "C"
+int wsrep_init_event_service_v1(wsrep_event_service_v1_t *event_service)
+{
+    return galera::EventService::init_v1(event_service);
+}
+
+extern "C" void wsrep_deinit_event_service_v1()
+{
+    galera::EventService::deinit_v1();
 }
