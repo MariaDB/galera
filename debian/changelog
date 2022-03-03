@@ -1,3 +1,12 @@
+galera-4 (26.4.11-0+deb11u1) bullseye; urgency=medium
+
+  * New upstream release 26.4.11. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.11.txt
+    and for previous release 26.4.10 see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.10.txt
+
+ -- Otto Kekäläinen <otto@debian.org>  Wed, 02 Mar 2022 21:26:00 -0800
+
 galera-4 (26.4.9-0+deb11u1) bullseye; urgency=medium
 
   [ Otto Kekäläinen ]
