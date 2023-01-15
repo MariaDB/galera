@@ -335,12 +335,22 @@ bool exclude_ssl_error(const asio::error_code& ec)
 {
     switch (ERR_GET_REASON(ec.value()))
     {
+        // Short read errors seem to be generated quite frequently
+        // by SSL library because of broken connections. For Galera
+        // connections premature EOFs are not a problem because messages
+        // are framed and the protocols are fault tolerant by design.
+        // The error to suppress are:
+        // SSL_R_SHORT_READ - OpenSSL < 3.0
+        // SSL_R_UNEXPECTED_EOF_WHILE_READING - OpenSSL >= 3.0
 #ifdef SSL_R_SHORT_READ
     case SSL_R_SHORT_READ:
-        // Short read error seems to be generated quite frequently
-        // by SSL library, probably because broken connections.
         return true;
 #endif /* SSL_R_SHORT_READ */
+#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
+    case SSL_R_UNEXPECTED_EOF_WHILE_READING:
+        // OpenSSL 3.0 and onwards.
+        return true;
+#endif /* SSL_R_UNEXPECTED_EOF_WHILE_READING */
     default:
         return false;
     }
@@ -370,7 +380,7 @@ std::string gu::extra_error_info(const gu::AsioErrorCode& ec)
 
 static SSL_CTX* native_ssl_ctx(asio::ssl::context& context)
 {
-#if ASIO_VERSION < 101601
+#if ASIO_VERSION < 101401
     return context.impl();
 #else
     return context.native_handle();
@@ -507,15 +517,28 @@ static void init_use_ssl(gu::Config& conf)
 void gu::ssl_register_params(gu::Config& conf)
 {
     // register SSL config parameters
-    conf.add(gu::conf::use_ssl);
-    conf.add(gu::conf::ssl_cipher);
-    conf.add(gu::conf::ssl_compression);
-    conf.add(gu::conf::ssl_key);
-    conf.add(gu::conf::ssl_cert);
-    conf.add(gu::conf::ssl_ca);
-    conf.add(gu::conf::ssl_password_file);
-    conf.add(gu::conf::ssl_reload);
-    conf.add(gu::conf::socket_dynamic);
+    conf.add(gu::conf::use_ssl,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::ssl_cipher,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::ssl_compression,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::ssl_key,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_cert,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_ca,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_password_file,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_reload,
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::socket_dynamic,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
 }
 
 void gu::ssl_param_set(const std::string& key, const std::string& val, 
@@ -527,7 +550,7 @@ void gu::ssl_param_set(const std::string& key, const std::string& val,
         {
             try
             {
-#if ASIO_VERSION < 101601
+#if ASIO_VERSION < 101401
                 asio::io_service io_service;
                 asio::ssl::context ctx(io_service, asio::ssl::context::sslv23);
 #else
@@ -579,7 +602,7 @@ void gu::ssl_init_options(gu::Config& conf)
         // values
         try
         {
-#if ASIO_VERSION < 101601
+#if ASIO_VERSION < 101401
             asio::io_service io_service;
             asio::ssl::context ctx(io_service, asio::ssl::context::sslv23);
 #else
@@ -696,6 +719,11 @@ void gu::AsioIoService::load_crypto_context()
 void gu::AsioIoService::run_one()
 {
     impl_->native().run_one();
+}
+
+void gu::AsioIoService::poll_one()
+{
+    impl_->native().poll_one();
 }
 
 void gu::AsioIoService::run()
