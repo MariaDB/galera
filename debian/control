@@ -18,6 +18,7 @@ Vcs-Git: https://salsa.debian.org/mariadb-team/galera-4.git
 Package: galera-4
 Architecture: any
 Section: libs
+Pre-Depends: adduser
 Depends: ${misc:Depends},
          ${shlibs:Depends}
 Conflicts: garbd-2,

@@ -1,0 +1,39 @@
+Description:
+ Running daemon under nobody user is not recommended.
+ See: https://github.com/systemd/systemd/blob/v246/NEWS#L106-L113
+Forwarded: https://github.com/codership/galera/pull/633
+Index: galera-4/garb/files/garb.service
+===================================================================
+--- galera-4.orig/garb/files/garb.service
++++ galera-4/garb/files/garb.service
+@@ -11,7 +11,7 @@ WantedBy=multi-user.target
+ Alias=garbd.service
+
+ [Service]
+-User=nobody
++User=_galera
+ ExecStart=/usr/bin/garb-systemd start
+
+ # Use SIGINT because with the default SIGTERM
+Index: galera-4/garb/files/garb.sh
+===================================================================
+--- galera-4.orig/garb/files/garb.sh
++++ galera-4/garb/files/garb.sh
+@@ -49,7 +49,7 @@ program_start() {
+ 	local rcode
+ 	if [ -f /etc/redhat-release ]; then
+ 		echo -n $"Starting $prog: "
+-		daemon --user nobody $prog "$@" >/dev/null
++		daemon --user _galera $prog "$@" >/dev/null
+ 		rcode=$?
+ 		if [ $rcode -eq 0 ]; then
+ 			pidof $prog > $PIDFILE || rcode=$?
+@@ -58,7 +58,7 @@ program_start() {
+ 		echo
+ 	else
+ 		log_daemon_msg "Starting $prog: "
+-		start-stop-daemon --start --quiet -c nobody --background \
++		start-stop-daemon --start --quiet -c _galera --background \
+ 		                  --exec $prog -- "$@"
+ 		rcode=$?
+ 		# Hack: sleep a bit to give garbd some time to fork

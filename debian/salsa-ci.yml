@@ -207,8 +207,8 @@ mariadb-10.6 bookworm full-upgrade:
   image: debian:bookworm
   script:
     - *test-prepare-container
-    # Install almost everything Galera currently in Debian Bookworm
-    # and the MariaDB Server 10.6 which uses Galera
+    # Install almost everything Galera currently in Debian Bullseye
+    # and the MariaDB Server 10.5 which uses Galera
     - apt-get install -y 'galera-*-4' mariadb-server
     - dpkg -l | grep -iE 'maria|mysql|galera'  # List installed
     # Verify MariaDB is running and Galera plugin is visible
