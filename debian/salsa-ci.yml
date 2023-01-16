@@ -1,5 +1,5 @@
 ---
-# Inlude Salsa-CI as a base
+# Include Salsa-CI as a base
 include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
@@ -44,12 +44,33 @@ build buster-backports:
   # Prime the apt cache so later apt commands can run
   apt-get update
 
+.test-enable-bullseye-repos: &test-enable-bullseye-repos |
+  # Replace any old repos with just Bullseye
+  echo "deb http://deb.debian.org/debian bullseye main" >/etc/apt/sources.list
+  # Upgrade minimal stack first
+  apt-get update
+  apt-get install -y apt
+
 .test-enable-sid-repos: &test-enable-sid-repos |
   # Replace any old repos with just Sid
   echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
   # Upgrade minimal stack first
   apt-get update
   apt-get install -y apt
+
+.test-enable-artifacts-repo: &test-enable-artifacts-repo |
+  apt-get install -y apt-utils
+  apt-ftparchive packages .>Packages
+  echo "deb [trusted=yes] file:$(pwd) ./" >>/etc/apt/sources.list
+  apt-get update
+
+.test-verify-installed-version: &test-verify-installed-version |
+  VERSION=$(ls galera-4*.deb | cut -d "_" -f2)
+  dpkg -l | grep galera | grep "$VERSION" || {
+    echo "Galera was not upgraded from artifacts:"
+    dpkg -l | grep galera
+    exit 1
+  }
 
 .test-upgrade: &test-upgrade |
   # List everything installed before upgrade
@@ -167,30 +188,28 @@ galera-3 stretch to galera-4 upgrade:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
   allow_failure: true  # Bug#993755: libcrypt.so.1 upgrade broken from Stretch/Buster to Bookworm
 
-mariadb-10.5 bullseye dist-upgrade:
+mariadb-10.6 bookworm full-upgrade:
   stage: upgrade from Bullseye/Buster/Stretch
   needs:
     - job: build
-  image: debian:bullseye
+  image: debian:bookworm
   script:
     - *test-prepare-container
-    # Install almost everything Galera currently in Debian Bullseye
-    # and the MariaDB Server 10.5 which uses Galera
+    # Install almost everything Galera currently in Debian Bookworm
+    # and the MariaDB Server 10.6 which uses Galera
     - apt-get install -y 'galera-*-4' mariadb-server
     - dpkg -l | grep -iE 'maria|mysql|galera'  # List installed
     # Verify MariaDB is running and Galera plugin is visible
     - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
-    # Add newly built packages as repository
-    - apt-get install -y apt-utils
-    - apt-ftparchive packages . > Packages
-    - echo "deb [trusted=yes] file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
     - *test-enable-sid-repos
+    - *test-enable-artifacts-repo
     # Start with regular upgrade
     - apt-get upgrade -y  # mysql-common and mariadb-common upgrade
     # Verify server still works
     - /etc/init.d/mysql restart && sleep 10 && mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
-    # Upgrade to Galera built in this commit via dist-upgrade
-    - apt-get dist-upgrade -y
+    # Upgrade to Galera built in this commit via full-upgrade
+    - apt-get full-upgrade -y
+    - *test-verify-installed-version
     - dpkg -l | grep -iE 'maria|mysql|galera'   # List installed
     # Verify MariaDB is running and Galera plugin is visible
     - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
@@ -200,7 +219,7 @@ mariadb-10.5 bullseye dist-upgrade:
     variables:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
 
-mariadb-10.3 buster dist-upgrade:
+mariadb-10.3 buster full-upgrade:
   stage: upgrade from Bullseye/Buster/Stretch
   needs:
     - job: build
@@ -213,17 +232,14 @@ mariadb-10.3 buster dist-upgrade:
     - dpkg -l | grep -iE 'maria|mysql|galera'  # List installed
     # Verify MariaDB is running and Galera plugin is visible
     - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
-    # Add newly built packages as repository
-    - apt-get install -y apt-utils
-    - apt-ftparchive packages . > Packages
-    - echo "deb [trusted=yes] file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
-    - *test-enable-sid-repos
+    - *test-enable-bullseye-repos
+    - *test-enable-artifacts-repo
     # Start with regular upgrade
     - apt-get upgrade -y  # mysql-common and mariadb-common upgrade
     # Verify server still works
     - /etc/init.d/mysql restart && sleep 10 && mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
-    # Upgrade to Galera built in this commit via dist-upgrade
-    - apt-get dist-upgrade -y
+    # Apply full-upgrade
+    - apt-get full-upgrade -y
     - dpkg -l | grep -iE 'maria|mysql|galera'  # List installed
     # Verify MariaDB is running and Galera plugin is visible
     - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
