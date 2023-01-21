@@ -55,8 +55,7 @@ Conflicts: galera-arbitrator-3,
            percona-xtradb-cluster-garbd-2.x
 Breaks: percona-xtradb-cluster-galera-2.x
 Replaces: percona-xtradb-cluster-galera-2.x
-Depends: lsb-base,
-         ${misc:Depends},
+Depends: ${misc:Depends},
          ${shlibs:Depends}
 Description: Galera arbitrator daemon
  Galera is a fast synchronous multimaster wsrep provider (replication engine)
