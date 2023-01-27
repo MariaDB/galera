@@ -319,11 +319,11 @@ build_packages()
 
     set +e
     if [ $DEBIAN -ne 0 ]; then # build DEB
-        debian_version="$(lsb_release -sr)"
-
-        # Adjust compat for older platforms
-        test "$debian_version" != "10.04" || echo 7 > debian/compat
-        test "$debian_version" != "6" || echo 8 > debian/compat
+        source /etc/os-release
+        # sid doesn't have VERSION_ID set
+        version=${VERSION_ID:-sid}
+        # remove . from version e.g. 22.04
+        debian_version=${ID:0:3}${version/.}
 
         dch -m -D "$debian_version" --force-distribution -v "$GALERA_VER-$debian_version" "Version upgrade"
         # -d : Do not check build dependencies and conflicts.
