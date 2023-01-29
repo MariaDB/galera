@@ -1,3 +1,2 @@
-version=3
-opts=pgpsigurlmangle=s/$/.asc/ \
-  https://releases.galeracluster.com/galera-4/source/galera-4-(.+).tar.gz
+version=4
+opts=pgpsigurlmangle=s/$/.asc/ https://releases.galeracluster.com/galera-4/source galera-4-(.+).tar.gz
