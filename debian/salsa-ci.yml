@@ -51,12 +51,26 @@ build buster-backports:
   apt-get update
   apt-get install -y apt
 
-.test-enable-sid-repos: &test-enable-sid-repos |
+.test-enable-sid-repos: &test-enable-sid-repos
   # Replace any old repos with just Sid
-  echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
+  - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
   # Upgrade minimal stack first
-  apt-get update
-  apt-get install -y apt
+  - apt-get update -qq
+  # Next step will fail on https://bugs.debian.org/993755
+  #   /usr/bin/perl: error while loading shared libraries: libcrypt.so.1: cannot
+  #     open shared object file: No such file or directory
+  #   dpkg: error processing package libc6:amd64 (--configure):
+  - apt-get install -y apt || true
+  # Apply workaround
+  - cd $(mktemp -d) # Use temp dir where apt can download and unpack files
+  - apt-get -y download libcrypt1
+  - dpkg-deb -x libcrypt1_*.deb .
+  - cp -ra lib/* /lib/
+  - cd - # Back to /builds/$USER/mariadb-server/debian/output
+  - find /lib/*/libcrypt.* -ls # Show that new libcrypt is there
+  - apt-get -y --fix-broken install
+  # Complete upgrade of minimal stack
+  - apt-get install -y apt
 
 .test-enable-artifacts-repo: &test-enable-artifacts-repo |
   apt-get install -y apt-utils
@@ -169,7 +183,6 @@ galera-3 buster to galera-4 upgrade:
   except:
     variables:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
-  allow_failure: true  # Bug#993755: libcrypt.so.1 upgrade broken from Stretch/Buster to Bookworm
 
 galera-3 stretch to galera-4 upgrade:
   stage: upgrade from Bullseye/Buster/Stretch
@@ -186,7 +199,6 @@ galera-3 stretch to galera-4 upgrade:
   except:
     variables:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
-  allow_failure: true  # Bug#993755: libcrypt.so.1 upgrade broken from Stretch/Buster to Bookworm
 
 mariadb-10.6 bookworm full-upgrade:
   stage: upgrade from Bullseye/Buster/Stretch
