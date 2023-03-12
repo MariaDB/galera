@@ -1,9 +1,13 @@
-galera-4 (26.4.13-2) UNRELEASED; urgency=medium
+galera-4 (26.4.14-1) UNRELEASED; urgency=medium
 
-  * Open new changelog entry. This will automatically be replaced
-    by 'gbp dch -avR' before next release.
+  [ Otto Kekäläinen ]
+  * New upstream release 26.4.14. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.14.txt
 
- -- Otto Kekäläinen <otto@debian.org>  Mon, 06 Feb 2023 07:32:44 -0800
+  [ Faustin Lammler ]
+  * Running daemon under nobody user is not recommended (Closes: #970045)
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 12 Mar 2023 15:19:28 -0700
 
 galera-4 (26.4.13-1) unstable; urgency=medium
 
