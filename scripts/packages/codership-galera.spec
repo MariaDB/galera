@@ -21,7 +21,7 @@
 
 %define name galera-4
 %define wsrep_api 26
-%{!?version: %define version 26.4.13}
+%{!?version: %define version 26.4.14}
 %{!?release: %define release 1}
 %define copyright Copyright 2007-2020 Codership Oy. All rights reserved. Use is subject to license terms under GPLv2 license.
 %define libs %{_libdir}/%{name}
