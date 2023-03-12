@@ -18,6 +18,7 @@
 #include <map>
 
 #include <climits>
+#include <functional>
 
 namespace gu
 {
@@ -95,6 +96,10 @@ public:
 
         if (i != params_.end())
         {
+            if (deprecation_check_func_)
+            {
+                deprecation_check_func_(i->first, i->second);
+            }
             i->second.set(value);
         }
         else
@@ -215,9 +220,10 @@ public:
         static const int type_bool = (1 << 3);
         static const int type_integer = (1 << 4);
         static const int type_double = (1 << 5);
+        static const int type_duration = (1 << 6);
 
-        static const int type_mask =
-            Flag::type_bool | Flag::type_integer | Flag::type_double;
+        static const int type_mask = Flag::type_bool | Flag::type_integer
+                                     | Flag::type_double | Flag::type_duration;
 
         static std::string to_string(int f)
         {
@@ -234,6 +240,8 @@ public:
                 s << "integer | ";
             if (f & Flag::type_double)
                 s << "double | ";
+            if (f & Flag::type_duration)
+                s << "duration | ";
             std::string ret(s.str());
             if (ret.length() > 3)
                 ret.erase(ret.length() - 3);
@@ -264,6 +272,11 @@ public:
             return flags_ & Flag::hidden;
         }
 
+        bool is_deprecated() const
+        {
+            return flags_ & Flag::deprecated;
+        }
+
         void set(const std::string& value)
         {
             value_ = value;
@@ -288,14 +301,18 @@ public:
     const_iterator begin() const { return params_.begin(); }
     const_iterator end()   const { return params_.end();   }
 
-private:
+    static void enable_deprecation_check();
+    static void disable_deprecation_check();
 
+private:
     static void
     key_check (const std::string& key);
 
     static void
     check_conversion (const char* ptr, const char* endptr, const char* type,
                       bool range_error = false);
+
+    static void check_deprecated(const std::string& str, const Parameter& param);
 
     static char
     overflow_char(long long ret);
@@ -309,8 +326,10 @@ private:
     void set_longlong (const std::string& key, long long value);
 
     param_map_t params_;
-};
 
+    static std::function<void(const std::string&, const Parameter&)>
+        deprecation_check_func_;
+};
 
 extern "C" const char* gu_str2dbl  (const char* str, double* dbl);
 extern "C" const char* gu_str2bool (const char* str, bool*   bl);
