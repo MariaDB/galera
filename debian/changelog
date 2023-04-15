@@ -1,4 +1,4 @@
-galera-4 (26.4.14-1) UNRELEASED; urgency=medium
+galera-4 (26.4.14-1~exp1) experimental; urgency=medium
 
   [ Otto Kekäläinen ]
   * New upstream release 26.4.14. Includes multiple bug fixes, see
@@ -7,7 +7,7 @@ galera-4 (26.4.14-1) UNRELEASED; urgency=medium
   [ Faustin Lammler ]
   * Running daemon under nobody user is not recommended (Closes: #970045)
 
- -- Otto Kekäläinen <otto@debian.org>  Sun, 12 Mar 2023 15:19:28 -0700
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 15 Apr 2023 14:27:31 -0700
 
 galera-4 (26.4.13-1) unstable; urgency=medium
 
