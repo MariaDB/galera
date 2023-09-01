@@ -344,7 +344,6 @@ build_packages()
         fi
         RET=$?
     fi
-    local RET=$?
 
     set -e
 
