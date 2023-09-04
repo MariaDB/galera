@@ -103,7 +103,7 @@ elif [ "$OS" == "FreeBSD" ]; then
   EXTRA_SYSROOT=/usr/local
 fi
 
-which dpkg >/dev/null 2>&1 && DEBIAN=${DEBIAN:-1} || DEBIAN=${DEBIAN:-0}
+which dpkg-buildpackage >/dev/null 2>&1 && DEBIAN=${DEBIAN:-1} || DEBIAN=${DEBIAN:-0}
 
 if [ "$OS" == "FreeBSD" ]; then
     CC=${CC:-"clang"}
