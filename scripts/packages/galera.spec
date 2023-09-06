@@ -53,12 +53,6 @@ BuildRoot:     %{_tmppath}/%{name}-%{version}
 BuildRequires: glibc-devel
 BuildRequires: openssl-devel
 
-%if 0%{?rhel} >= 8
-BuildRequires: python3-scons
-%else
-BuildRequires: scons
-%endif
-
 %if 0%{?suse_version} == 1110
 # On SLES11 SPx use the linked gcc47 to build instead of default gcc43
 #BuildRequires: gcc47 gcc47-c++
