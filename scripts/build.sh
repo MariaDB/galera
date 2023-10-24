@@ -113,12 +113,6 @@ else
     CXX=${CXX:-"g++"}
 fi
 
-if ccache -V > /dev/null 2>&1
-then
-    echo "$CC"  | grep "ccache" > /dev/null || CC="ccache $CC"
-    echo "$CXX" | grep "ccache" > /dev/null || CXX="ccache $CXX"
-fi
-
 # MariaDB Centos5 & SLES-SP1 buildbot images require LD_LIBRARY_PATH to
 # /usr/local/lib
 if [ -r /etc/redhat-release ]; then
