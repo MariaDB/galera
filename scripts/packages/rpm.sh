@@ -25,41 +25,42 @@ RPM_OPT_FLAGS="$fast_cflags $cpu_cflags"
 GALERA_SPEC=$SCRIPT_ROOT/galera.spec
 
 RELEASE=${RELEASE:-"1"}
+DISTRO_VERSION=
 
-if  [ -r /etc/fedora-release ]
+if  [ -r /etc/os-release ]
 then
-    DISTRO_VERSION=fc$(rpm -qf --qf '%{version}\n' /etc/fedora-release)
-elif [ -r /etc/redhat-release ]
-then
-    DISTRO_VERSION=rhel$(rpm -qf --qf '%{version}\n' /etc/redhat-release)
+    source /etc/os-release
 elif [ -r /etc/SuSE-release ]
 then
     DISTRO_VERSION=sles$(rpm -qf --qf '%{version}\n' /etc/SuSE-release | cut -d. -f1)
-else
-    DISTRO_VERSION=
 fi
-
-# Perhaps not needed for fc20? As it causes package name to be
-# galera...fc20.fc20..rpm
-# See %_rpmfilename (http://rpm.org/api/4.4.2.2/config_macros.html)
-#[ -n "$DISTRO_VERSION" ] && RELEASE=$RELEASE.$DISTRO_VERSION
 
 DIST_TAG=
 # %dist does not return a value for sles12
 # https://bugs.centos.org/view.php?id=3239
-if [ ${DISTRO_VERSION} = "sles12" ]
+if [ "${DISTRO_VERSION}" = "sles12" ]
 then
   DIST_TAG=".sles12"
 fi
 
-if [ ${DISTRO_VERSION} = "sles42" ]
+if [ "${DISTRO_VERSION}" = "sles42" ]
 then
   DIST_TAG=".sles42"
 fi
 
 if [ -z "$DIST_TAG" ]
 then
-  DIST_TAG=$(rpm --eval %{dist})
+  DIST_TAG=$(rpm --eval "%{dist}")
+  if [ "$DIST_TAG" = "%{dist}" ]
+  then
+    DIST_TAG=
+  fi
+fi
+
+# from /etc/os-release
+if  [ -z "$DIST_TAG" ]
+then
+  DIST_TAG=".${ID}${VERSION_ID%%.*}"
 fi
 
 $(which rpmbuild) --clean --define "_topdir $RPM_TOP_DIR" \
