@@ -412,9 +412,7 @@ then
 fi
 if [ "$PACKAGE" == "yes" -a $DEBIAN -ne 0 ]
 then
-    # Skip extra build step when building package for debian
-    echo "Reset env for Debian package build"
-    unset CC CXX LD_LIBRARY_PATH CPPFLAGS CFLAGS CXXFLAGS
+    echo "Debian package build"
 elif [ "$CMAKE" == "yes" ] # Build using CMake
 then
     cmake_args="$CMAKE_OPTS -DGALERA_REVISION=$GALERA_REV"
