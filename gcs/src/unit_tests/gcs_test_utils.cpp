@@ -16,7 +16,7 @@ void
 InitConfig::common_ctor(gu::Config& cfg)
 {
     gcache::GCache::register_params(cfg);
-    gcs_register_params(reinterpret_cast<gu_config_t*>(&cfg));
+    gcs_register_params(cfg);
 }
 
 InitConfig::InitConfig(gu::Config& cfg)
@@ -40,7 +40,7 @@ GcsGroup::GcsGroup() :
     conf_   (),
     init_   (conf_, "group"),
     gcache_ (NULL),
-    group_  (),
+    group_  (NULL),
     initialized_(false)
 {}
 
@@ -77,6 +77,8 @@ GcsGroup::common_ctor(const std::string& node_name,
                            ": already exists." : ": doesn't exist.");
     }
 
+    conf_.set("gcache.name", std::string(node_name) + ".cache");
+
     if (enc)
     {
         gcache_ = new gcache::GCache(NULL,conf_, path_, gcache_test_encrypt_cb,
@@ -89,30 +91,9 @@ GcsGroup::common_ctor(const std::string& node_name,
         gcache_ = new gcache::GCache(NULL, conf_, path_);
     }
 
-    int const err(gcs_group_init(&group_, &conf_,
-                                 reinterpret_cast<gcache_t*>(gcache_),
-                                 node_name.c_str(), inc_addr.c_str(),
-                                 gver, rver, aver));
-    if (err)
-    {
-        gu_throw_error(-err) << "GcsGroup init failed: " << -err;
-    }
-
+    group_ = new gcs_group(conf_, reinterpret_cast<gcache_t*>(gcache_),
+                           node_name, inc_addr, gver, rver, aver);
     initialized_ = true;
-}
-
-GcsGroup::GcsGroup(const std::string& node_id,
-                   const std::string& inc_addr,
-                   bool enc,
-                   gcs_proto_t gver, int rver, int aver) :
-    path_   ("./"),
-    conf_   (),
-    init_   (conf_, node_id),
-    gcache_ (NULL),
-    group_  (),
-    initialized_(false)
-{
-    common_ctor(node_id, inc_addr, enc, gver, rver, aver);
 }
 
 void
@@ -121,7 +102,8 @@ GcsGroup::common_dtor()
     if (initialized_)
     {
         assert(NULL != gcache_);
-        gcs_group_free(&group_);
+        assert(NULL != group_);
+        delete group_;
         delete gcache_;
 
         boost::filesystem::path path(path_);
@@ -133,6 +115,7 @@ GcsGroup::common_dtor()
     else
     {
         assert(NULL == gcache_);
+        assert(NULL == group_);
     }
 }
 

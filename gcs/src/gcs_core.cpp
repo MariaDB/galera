@@ -33,11 +33,14 @@
 
 using namespace gcs::core;
 
-bool
-gcs_core_register (gu_config_t* conf)
+void
+gcs_core_register(gu::Config& conf)
 {
-    gcs_group_register(reinterpret_cast<gu::Config*>(conf));
-    return (gcs_backend_register(conf));
+    gcs_group::register_params(conf);
+    if (gcs_backend_register(reinterpret_cast<gu_config_t*>(&conf)))
+    {
+        gu_throw_fatal << "Could not register backend parmeters";
+    }
 }
 
 const size_t CORE_FIFO_LEN = (1 << 10); // 1024 elements (no need to have more)
@@ -55,8 +58,20 @@ core_state_t;
 
 struct gcs_core
 {
+    gcs_core(gu::Config&  conf,
+             gcache_t*    cache,
+             const char*  node_name,
+             const char*  inc_addr,
+             int          repl_proto_ver,
+             int          appl_proto_ver,
+             int          gcs_proto_ver = GCS_PROTO_MAX);
+    ~gcs_core();
+
     gu_config_t*    config;
     gcache_t*       cache;
+
+    /* group context */
+    gcs_group_t     group;
 
     /* connection per se */
     long            prim_comp_no;
@@ -81,9 +96,6 @@ struct gcs_core
 
     /* local action FIFO */
     gcs_fifo_lite_t* fifo;
-
-    /* group context */
-    gcs_group_t     group;
 
     /* backend part */
     size_t          msg_size;
@@ -113,24 +125,37 @@ typedef struct causal_act
     gu_cond_t*   cond;
 } causal_act_t;
 
-gcs_core_t*
-gcs_core_create (gu_config_t* const conf,
-                 gcache_t*    const cache,
-                 const char*  const node_name,
-                 const char*  const inc_addr,
-                 int          const repl_proto_ver,
-                 int          const appl_proto_ver,
-                 int          const gcs_proto_ver)
+gcs_core::gcs_core(gu::Config&  conf,
+                   gcache_t*    cache,
+                   const char*  node_name,
+                   const char*  inc_addr,
+                   int          repl_proto_ver,
+                   int          appl_proto_ver,
+                   int          gcs_proto_ver)
+    :
+    config(reinterpret_cast<gu_config_t*>(&conf)),
+    cache(cache),
+    group(conf, cache, node_name, inc_addr,
+          gcs_proto_ver, repl_proto_ver,appl_proto_ver),
+    prim_comp_no(),
+    state(),
+    proto_ver(),
+    send_lock(),
+    send_buf(),
+    send_buf_len(),
+    send_act_no(),
+    recv_msg(),
+    code_msg_buf(),
+    fifo(),
+    msg_size(),
+    backend()
+#ifdef GCS_CORE_TESTING
+    ,ls()        // to lock-step in unit tests
+    ,state_uuid()
+#endif
 {
-    assert (conf);
-
-    gcs_core_t* core = GU_CALLOC (1, gcs_core_t);
-
-    if (NULL != core) {
-
-        core->config = conf;
-        core->cache  = cache;
-
+    auto core(this); // to minimize diff
+    {
         // Need to allocate something, otherwise Spread 3.17.3 freaks out.
         core->recv_msg.buf = gu_malloc(CORE_INIT_BUF_SIZE);
         if (core->recv_msg.buf) {
@@ -150,19 +175,13 @@ gcs_core_create (gu_config_t* const conf,
                         &core->send_lock);
                     core->proto_ver = -1;
                     // ^^^ shall be bumped in gcs_group_act_conf()
-
-                    gcs_group_init(&core->group,
-                                   reinterpret_cast<gu::Config *>(conf), cache,
-                                   node_name, inc_addr, gcs_proto_ver,
-                                   repl_proto_ver, appl_proto_ver);
-
                     core->state = CORE_CLOSED;
                     core->send_act_no = 1; // 0 == no actions sent
 #ifdef GCS_CORE_TESTING
                     gu_lock_step_init (&core->ls);
                     core->state_uuid = GU_UUID_NIL;
 #endif
-                    return core; // success
+                    return; // success
                 }
 
                 gu_free (core->send_buf);
@@ -170,11 +189,27 @@ gcs_core_create (gu_config_t* const conf,
 
             gu_free (core->recv_msg.buf);
         }
-
-        gu_free (core);
     }
 
-    return NULL; // failure
+    gu_throw_fatal << "Failed to initialize GCS core";
+}
+
+gcs_core_t*
+gcs_core_create (gu::Config&  conf,
+                 gcache_t*    const cache,
+                 const char*  const node_name,
+                 const char*  const inc_addr,
+                 int          const repl_proto_ver,
+                 int          const appl_proto_ver,
+                 int          const gcs_proto_ver)
+{
+    try {
+        return new gcs_core(conf, cache, node_name, inc_addr,
+                            repl_proto_ver, appl_proto_ver, gcs_proto_ver);
+    }
+    catch (...) {
+        return nullptr;
+    }
 }
 
 long
@@ -1337,11 +1372,10 @@ long gcs_core_close (gcs_core_t* core)
     return ret;
 }
 
-long gcs_core_destroy (gcs_core_t* core)
+static int
+core_destroy(gcs_core_t* core)
 {
     core_act_t* tmp;
-
-    if (!core) return -EBADFD;
 
     if (gu_mutex_lock (&core->send_lock)) return -EBADFD;
     {
@@ -1370,7 +1404,6 @@ long gcs_core_destroy (gcs_core_t* core)
         gcs_fifo_lite_pop_head (core->fifo);
     }
     gcs_fifo_lite_destroy (core->fifo);
-    gcs_group_free (&core->group);
 
     /* free buffers */
     gu_free (core->recv_msg.buf);
@@ -1380,9 +1413,26 @@ long gcs_core_destroy (gcs_core_t* core)
     gu_lock_step_destroy (&core->ls);
 #endif
 
-    gu_free (core);
-
     return 0;
+}
+
+gcs_core::~gcs_core()
+{
+    int const ret(core_destroy(this));
+    if (ret) {
+        gu_throw_error(ret) << "GCS core destructor failed";
+    }
+}
+
+long gcs_core_destroy (gcs_core_t* core)
+{
+    try {
+        delete core;
+        return 0;
+    }
+    catch (...) {
+        return -1;
+    }
 }
 
 int

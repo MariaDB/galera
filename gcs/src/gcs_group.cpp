@@ -26,11 +26,11 @@
 std::string const GCS_VOTE_POLICY_KEY("gcs.vote_policy");
 uint8_t     const GCS_VOTE_POLICY_DEFAULT(0);
 
-void gcs_group_register(gu::Config* cnf)
+void gcs_group::register_params(gu::Config& cnf)
 {
-    cnf->add(GCS_VOTE_POLICY_KEY,
-             gu::Config::Flag::read_only |
-             gu::Config::Flag::type_integer);
+    cnf.add(GCS_VOTE_POLICY_KEY,
+            gu::Config::Flag::read_only |
+            gu::Config::Flag::type_integer);
 }
 
 const char* gcs_group_state_str[GCS_GROUP_STATE_MAX] =
@@ -56,49 +56,50 @@ uint8_t gcs_group_conf_to_vote_policy(gu::Config& cnf)
     return i;
 }
 
-int
-gcs_group_init (gcs_group_t* group, gu::Config* const cnf, gcache_t* const cache,
-                const char* node_name, const char* inc_addr,
-                gcs_proto_t const gcs_proto_ver, int const repl_proto_ver,
-                int const appl_proto_ver)
-{
-    // here we also create default node instance.
-    group->cache        = cache;
-    group->act_id_      = GCS_SEQNO_ILL;
-    group->conf_id      = GCS_SEQNO_ILL;
-    group->state_uuid   = GU_UUID_NIL;
-    group->group_uuid   = GU_UUID_NIL;
-    group->num          = 0;
-    group->my_idx       = -1;
-    group->my_name      = strdup(node_name ? node_name : NODE_NO_NAME);
-    group->my_address   = strdup(inc_addr  ? inc_addr  : NODE_NO_ADDR);
-    group->state        = GCS_GROUP_NON_PRIMARY;
-    group->last_applied = group->act_id_;
-    group->last_node    = -1;
-    group->vote_request_seqno = GCS_NO_VOTE_SEQNO;
-    group->vote_result  = (VoteResult){ GCS_NO_VOTE_SEQNO, 0 };
-    group->vote_history = new VoteHistory;
-    group->vote_policy  = gcs_group_conf_to_vote_policy(*cnf);
-    group->frag_reset   = true; // just in case
-    group->nodes        = NULL;
-    group->prim_uuid    = GU_UUID_NIL;
-    group->prim_seqno   = GCS_SEQNO_ILL;
-    group->prim_num     = 0;
-    group->prim_state   = GCS_NODE_STATE_NON_PRIM;
-    group->prim_gcs_ver  = 0;
-    group->prim_repl_ver = 0;
-    group->prim_appl_ver = 0;
+gcs_group::gcs_group(gu::Config&  cnf,
+                     gcache_t*    cache,
+                     const char*  node_name, ///< can be null
+                     const char*  inc_addr,  ///< can be null
+                     gcs_proto_t  gcs_proto_ver,
+                     int          repl_proto_ver,
+                     int          appl_proto_ver)
+    :
+    memb_mtx_     (gu::get_mutex_key(gu::GU_MUTEX_KEY_GCS_MEMBERSHIP)),
+    memb_epoch_   (GCS_SEQNO_ILL),
+    cache         (cache),
+    cnf           (cnf),
+    act_id_       (GCS_SEQNO_ILL),
+    conf_id       (GCS_SEQNO_ILL),
+    state_uuid    (GU_UUID_NIL),
+    group_uuid    (GU_UUID_NIL),
+    num           (0),
+    my_idx        (-1),
+    my_name       (strdup(node_name ? node_name : NODE_NO_NAME)),
+    my_address    (strdup(inc_addr  ? inc_addr  : NODE_NO_ADDR)),
+    state         (GCS_GROUP_NON_PRIMARY),
+    last_applied  (act_id_),
+    last_node     (-1),
+    vote_request_seqno (GCS_NO_VOTE_SEQNO),
+    vote_result   ((VoteResult){ GCS_NO_VOTE_SEQNO, 0 }),
+    vote_history  (),
+    vote_policy   (gcs_group_conf_to_vote_policy(cnf)),
+    frag_reset    (true), // just in case
+    nodes         (NULL),
+    prim_uuid     (GU_UUID_NIL),
+    prim_seqno    (GCS_SEQNO_ILL),
+    prim_num      (0),
+    prim_state    (GCS_NODE_STATE_NON_PRIM),
+    prim_gcs_ver  (0),
+    prim_repl_ver (0),
+    prim_appl_ver (0),
 
-    *(gcs_proto_t*)&group->gcs_proto_ver = gcs_proto_ver;
-    *(int*)&group->repl_proto_ver = repl_proto_ver;
-    *(int*)&group->appl_proto_ver = appl_proto_ver;
+    gcs_proto_ver (gcs_proto_ver),
+    repl_proto_ver(repl_proto_ver),
+    appl_proto_ver(appl_proto_ver),
 
-    group->quorum = GCS_QUORUM_NON_PRIMARY;
-
-    group->last_applied_proto_ver = -1;
-
-    return 0;
-}
+    quorum        (GCS_QUORUM_NON_PRIMARY),
+    last_applied_proto_ver(-1)
+{}
 
 int
 gcs_group_init_history (gcs_group_t*    group,
@@ -185,10 +186,16 @@ gcs_group_free (gcs_group_t* group)
 {
     if (group->my_name)    free ((char*)group->my_name);
     if (group->my_address) free ((char*)group->my_address);
-    delete group->vote_history;
+
+    group->vote_history.clear();
 
     gu::Lock lock(group->memb_mtx_);
     group_nodes_free (group);
+}
+
+gcs_group::~gcs_group()
+{
+    gcs_group_free(this);
 }
 
 /* Reset nodes array without breaking the statistics */
@@ -1005,7 +1012,7 @@ group_recount_votes (gcs_group_t& group)
         // record voting result in the history for later
         std::pair<gu::GTID,int64_t> const val(vote_gtid, win_vote);
         std::pair<VoteHistory::iterator, bool> const res
-                    (group.vote_history->insert(val));
+                    (group.vote_history.insert(val));
         if (false == res.second)
         {
             assert(0);
@@ -1088,11 +1095,11 @@ gcs_group_handle_vote_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
         msg << "Recovering vote result from history: " << gtid;
 
         int64_t result(0);
-        VoteHistory::iterator it(group->vote_history->find(gtid));
-        if (group->vote_history->end() != it)
+        VoteHistory::iterator it(group->vote_history.find(gtid));
+        if (group->vote_history.end() != it)
         {
             result = it->second;
-            group->vote_history->erase(it);
+            group->vote_history.erase(it);
             msg << ',' << gu::PrintBase<>(result);
         }
         else
