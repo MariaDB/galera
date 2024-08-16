@@ -54,7 +54,8 @@ gu_log (gu_log_severity_t severity,
         const char*       file,
         const char*       function,
         const int         line,
-        ...);
+        const char*       fmt,
+        ...) __attribute__((format(printf, 5, 6)));
 
 /** This variable is made global only for the purpose of using it in
  *  gu_debug() macro and avoid calling gu_log() when debug is off.
@@ -68,23 +69,25 @@ extern gu_log_severity_t gu_log_max_level;
 #endif
 
 #if !defined(__cplusplus) || defined(GALERA_LOG_H_ENABLE_CXX)
-// NOTE: don't add "\n" here even if you really want to do it
-#define GU_LOG_C(level, ...)\
-        gu_log(level, __FILE__, __func__, __LINE__,\
-               __VA_ARGS__, NULL)
-
 /**
  * @name Logging macros.
  * Must be implemented as macros to report the location of the code where
  * they are called.
  */
 /*@{*/
-#define gu_fatal(...) GU_LOG_C(GU_LOG_FATAL, __VA_ARGS__, NULL)
-#define gu_error(...) GU_LOG_C(GU_LOG_ERROR, __VA_ARGS__, NULL)
-#define gu_warn(...)  GU_LOG_C(GU_LOG_WARN,  __VA_ARGS__, NULL)
-#define gu_info(...)  GU_LOG_C(GU_LOG_INFO,  __VA_ARGS__, NULL)
-#define gu_debug(...) if (gu_unlikely(gu_log_debug))    \
-    { GU_LOG_C(GU_LOG_DEBUG, __VA_ARGS__, NULL); }
+#define gu_fatal(...)                                                          \
+    gu_log(GU_LOG_FATAL, __FILE__, __func__, __LINE__, __VA_ARGS__);
+#define gu_error(...)                                                          \
+    gu_log(GU_LOG_ERROR, __FILE__, __func__, __LINE__, __VA_ARGS__);
+#define gu_warn(...)                                                           \
+    gu_log(GU_LOG_WARN, __FILE__, __func__, __LINE__, __VA_ARGS__);
+#define gu_info(...)                                                           \
+    gu_log(GU_LOG_INFO, __FILE__, __func__, __LINE__, __VA_ARGS__)
+#define gu_debug(...)                                                          \
+    if (gu_unlikely(gu_log_debug))                                             \
+    {                                                                          \
+        gu_log(GU_LOG_DEBUG, __FILE__, __func__, __LINE__, __VA_ARGS__);       \
+    }
 /*@}*/
 
 #endif /* __cplusplus */

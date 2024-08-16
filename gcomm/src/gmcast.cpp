@@ -718,9 +718,9 @@ void gcomm::GMCast::handle_established(Proto* est)
     if (AddrList::value(i).retry_cnt() >
         AddrList::value(i).max_retries())
     {
-        log_warn << "discarding established (time wait) "
-                 << est->remote_uuid()
-                 << " (" << est->remote_addr() << ") ";
+        log_info << "discarding connection " << est->remote_uuid() << " ("
+                 << est->remote_addr() << ") "
+                 << "after " << AddrList::value(i).retry_cnt() << " retries";
         erase_proto(proto_map_->find(est->socket()->id()));
         update_addresses();
         return;

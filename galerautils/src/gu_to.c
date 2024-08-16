@@ -12,6 +12,8 @@
  * section is required, these functions can be used to do this.
  */
 
+
+#include <inttypes.h>
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
@@ -130,12 +132,12 @@ long gu_to_destroy (gu_to_t** to)
 #ifdef TO_USE_SIGNAL
         if (gu_cond_destroy (&w->cond)) {
             // @todo: what if someone is waiting?
-            gu_warn ("Failed to destroy condition %d. Should not happen", i);
+            gu_warn ("Failed to destroy condition %zd. Should not happen", i);
         }
 #else
         if (pthread_mutex_destroy (&w->mtx)) {
             // @todo: what if someone is waiting?
-            gu_warn ("Failed to destroy mutex %d. Should not happen", i);
+            gu_warn ("Failed to destroy mutex %zd. Should not happen", i);
         }
 #endif
     }    
@@ -160,7 +162,7 @@ long gu_to_grab (gu_to_t* to, gu_seqno_t seqno)
     assert (seqno >= 0);
 
     if ((err = gu_mutex_lock(&to->lock))) {
-        gu_fatal("Mutex lock failed (%d): %s", err, strerror(err));
+        gu_fatal("Mutex lock failed (%ld): %s", err, strerror(err));
         abort();
     }
 
@@ -220,7 +222,8 @@ long gu_to_grab (gu_to_t* to, gu_seqno_t seqno)
                 err = -ECANCELED;
                 break;
             default:
-                gu_fatal("Invalid cond wait exit state %d, seqno %llu(%llu)",
+                gu_fatal("Invalid cond wait exit state %d, seqno %" PRId64
+                         "(%" PRId64 ")",
                          w->state, seqno, to->seqno);
                 abort();
             }
@@ -247,7 +250,7 @@ to_wake_waiter (to_waiter_t* w)
         err = pthread_mutex_unlock (&w->mtx);
 #endif
         if (err) {
-            gu_fatal ("gu_cond_signal failed: %d", err);
+            gu_fatal ("gu_cond_signal failed: %ld", err);
         }
     }
     return err;
@@ -277,7 +280,7 @@ long gu_to_release (gu_to_t *to, gu_seqno_t seqno)
     assert (seqno >= 0);
 
     if ((err = gu_mutex_lock(&to->lock))) {
-        gu_fatal("Mutex lock failed (%d): %s", err, strerror(err));
+        gu_fatal("Mutex lock failed (%ld): %s", err, strerror(err));
         abort();
     }
 
@@ -321,7 +324,7 @@ long gu_to_cancel (gu_to_t *to, gu_seqno_t seqno)
     assert (seqno >= 0);
 
     if ((err = gu_mutex_lock (&to->lock))) {
-        gu_fatal("Mutex lock failed (%d): %s", err, strerror(err));
+        gu_fatal("Mutex lock failed (%ld): %s", err, strerror(err));
         abort();
     }
     
@@ -337,15 +340,19 @@ long gu_to_cancel (gu_to_t *to, gu_seqno_t seqno)
         err = to_wake_waiter (w);
         w->state = CANCELED;
     } else if (seqno == to->seqno && w->state == HOLDER) {
-        gu_warn("tried to cancel current TO holder, state %d seqno %llu",
-                 w->state, seqno);
+        gu_warn("tried to cancel current TO holder, state %d seqno %" PRId64,
+                w->state, seqno);
         err = -ECANCELED;
-    } else {
-        gu_warn("trying to cancel used seqno: state %d cancel seqno = %llu, "
-                "TO seqno = %llu", w->state, seqno, to->seqno);
-        err = -ECANCELED;        
     }
-    
+    else
+    {
+        gu_warn("trying to cancel used seqno: state %d cancel seqno = %" PRId64
+                ", "
+                "TO seqno = %" PRId64,
+                w->state, seqno, to->seqno);
+        err = -ECANCELED;
+    }
+
     gu_mutex_unlock (&to->lock);
     return err;
 }
@@ -358,7 +365,7 @@ long gu_to_self_cancel(gu_to_t *to, gu_seqno_t seqno)
     assert (seqno >= 0);
 
     if ((err = gu_mutex_lock (&to->lock))) {
-        gu_fatal("Mutex lock failed (%d): %s", err, strerror(err));
+        gu_fatal("Mutex lock failed (%ld): %s", err, strerror(err));
         abort();
     }
 
@@ -394,7 +401,7 @@ long gu_to_interrupt (gu_to_t *to, gu_seqno_t seqno)
     assert (seqno >= 0);
 
     if ((err = gu_mutex_lock (&to->lock))) {
-        gu_fatal("Mutex lock failed (%d): %s", err, strerror(err));
+        gu_fatal("Mutex lock failed (%ld): %s", err, strerror(err));
         abort();
     }
     if (seqno >= to->seqno) {
@@ -406,33 +413,36 @@ long gu_to_interrupt (gu_to_t *to, gu_seqno_t seqno)
 
         switch (w->state) {
         case HOLDER:
-            gu_debug ("trying to interrupt in use seqno: seqno = %llu, "
-                      "TO seqno = %llu", seqno, to->seqno);
+            gu_debug("trying to interrupt in use seqno: seqno = %" PRId64 ", "
+                     "TO seqno = %" PRId64,
+                     seqno, to->seqno);
             /* gu_mutex_unlock (&to->lock); */
             rcode = -ERANGE;
             break;
         case CANCELED:
-            gu_debug ("trying to interrupt canceled seqno: seqno = %llu, "
-                      "TO seqno = %llu", seqno, to->seqno);
+            gu_debug("trying to interrupt canceled seqno: seqno = %" PRId64 ", "
+                     "TO seqno = %" PRId64,
+                     seqno, to->seqno);
             /* gu_mutex_unlock (&to->lock); */
             rcode = -ERANGE;
             break;
         case WAIT:
-            gu_debug ("signaling to interrupt wait seqno: seqno = %llu, "
-                      "TO seqno = %llu", seqno, to->seqno);
-            rcode    = to_wake_waiter (w);
+            gu_debug("signaling to interrupt wait seqno: seqno = %" PRId64 ", "
+                     "TO seqno = %" PRId64,
+                     seqno, to->seqno);
+            rcode = to_wake_waiter(w);
             /* fall through */
-        case RELEASED:
-            w->state = INTERRUPTED;
-            break;
+        case RELEASED: w->state = INTERRUPTED; break;
         case INTERRUPTED:
-            gu_debug ("TO waiter interrupt already seqno: seqno = %llu, "
-                      "TO seqno = %llu", seqno, to->seqno);
+            gu_debug("TO waiter interrupt already seqno: seqno = %" PRId64 ", "
+                     "TO seqno = %" PRId64,
+                     seqno, to->seqno);
             break;
         }
     } else {
-        gu_debug ("trying to interrupt used seqno: cancel seqno = %llu, "
-                  "TO seqno = %llu", seqno, to->seqno);
+        gu_debug("trying to interrupt used seqno: cancel seqno = %" PRId64 ", "
+                 "TO seqno = %" PRId64,
+                 seqno, to->seqno);
         /* gu_mutex_unlock (&to->lock); */
         rcode = -ERANGE;
     }

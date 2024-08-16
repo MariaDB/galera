@@ -111,7 +111,7 @@ gu_fifo_t *gu_fifo_create (size_t length, size_t item_size)
 
         if (max_size > gu_avphys_bytes()) {
             gu_error ("Maximum FIFO size %llu exceeds available memory "
-                      "limit %llu", max_size, gu_avphys_bytes());
+                      "limit %zu", max_size, gu_avphys_bytes());
             return NULL;
         }
 
@@ -122,8 +122,8 @@ gu_fifo_t *gu_fifo_create (size_t length, size_t item_size)
         }
 
 
-        gu_debug ("Creating FIFO buffer of %llu elements of size %llu, "
-                  "memory min used: %zu, max used: %zu",
+        gu_debug ("Creating FIFO buffer of %llu elements of size %zu, "
+                  "memory min used: %llu, max used: %llu",
                   array_len * row_len, item_size, alloc_size,
                   alloc_size + array_len*row_size);
 
@@ -143,7 +143,7 @@ gu_fifo_t *gu_fifo_create (size_t length, size_t item_size)
             gu_cond_init  (NULL, &ret->put_cond);
         }
         else {
-            gu_error ("Failed to allocate %zu bytes for FIFO", alloc_size);
+            gu_error ("Failed to allocate %llu bytes for FIFO", alloc_size);
         }
     }
 
@@ -204,7 +204,7 @@ static int fifo_flush (gu_fifo_t* q)
     /* if there are items in the queue, wait until they are all fetched */
     while (q->used > 0 && 0 == ret) {
         /* will make getters to signal every time item is removed */
-        gu_warn ("Waiting for %lu items to be fetched.", q->used);
+        gu_warn ("Waiting for %u items to be fetched.", q->used);
         q->put_wait++;
         ret = gu_cond_wait (&q->put_cond, &q->lock);
     }

@@ -399,7 +399,7 @@ core_test_init (gu::Config* config,
         Cache = new gcache::GCache(NULL, *config, ".");
     }
 
-    Core = gcs_core_create (reinterpret_cast<gu_config_t*>(config),
+    Core = gcs_core_create (*config,
                             reinterpret_cast<gcache_t*>(Cache),
                             "core_test", "aaa.bbb.ccc.ddd:xxxx", 0, 0,
                             gcs_proto_ver);
@@ -543,7 +543,7 @@ test_api(bool const enc)
     while (i--) {
         long     frags    = (act_size - 1)/FRAG_SIZE + 1;
 
-        gu_info ("Iteration %ld: act: %s, size: %zu, frags: %ld",
+        gu_info ("Iteration %ld: act: %p, size: %zu, frags: %ld",
                  i, act, act_size, frags);
 
         ck_assert(!CORE_SEND_START (&act_s));

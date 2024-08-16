@@ -51,6 +51,7 @@ libgcs_sources = Split('''
                           gcs_fc.cpp
                           gcs.cpp
                           gcs_gcomm.cpp
+                          gcs_error.cpp
                        ''')
 #libgcs_env.VariantDir('.gcs', '.', duplicate=0)
 libgcs_env.StaticLibrary('gcs', libgcs_sources)

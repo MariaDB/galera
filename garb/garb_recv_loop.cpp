@@ -49,14 +49,16 @@ RecvLoop::RecvLoop (const Config& config)
 
     if (sigaction (SIGTERM, &sa, NULL))
     {
-        gu_throw_error(errno) << "Falied to install signal handler for signal "
-                              << "SIGTERM";
+        gu_throw_system_error(errno)
+            << "Falied to install signal handler for signal "
+            << "SIGTERM";
     }
 
     if (sigaction (SIGINT, &sa, NULL))
     {
-        gu_throw_error(errno) << "Falied to install signal handler for signal "
-                              << "SIGINT";
+        gu_throw_system_error(errno)
+            << "Failed to install signal handler for signal "
+            << "SIGINT";
     }
 
     loop();

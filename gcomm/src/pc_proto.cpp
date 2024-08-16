@@ -183,6 +183,21 @@ void gcomm::pc::Proto::send_state()
     }
 }
 
+static std::string send_error_str(int const err)
+{
+    std::ostringstream os;
+    switch (err)
+    {
+    case 0: os << "Success"; break;
+    case EAGAIN:
+        os << "Cluster configuration change in progress or flow control active";
+        break;
+    case ENOTCONN: os << "Not connected to the cluster"; break;
+    default: os << "Unknown error: " << err; break;
+    }
+    return os.str();
+}
+
 int gcomm::pc::Proto::send_install(bool bootstrap, int weight)
 {
     gcomm_assert(bootstrap == false || weight == -1);
@@ -227,10 +242,10 @@ int gcomm::pc::Proto::send_install(bool bootstrap, int weight)
     serialize(pci, buf);
     Datagram dg(buf);
     int ret = send_down(dg, ProtoDownMeta());
-    if (ret != 0)
+    if (ret)
     {
-        log_warn << self_id() << " sending install message failed: "
-                 << strerror(ret);
+        log_info << "sending install message for new primary component failed: "
+                 << send_error_str(ret) << ", will retry in next configuration";
     }
     return ret;
 }
@@ -579,14 +594,14 @@ void gcomm::pc::Proto::handle_trans(const View& view)
         if (closing_ == false && ignore_sb_ == true && have_split_brain(view))
         {
             // configured to ignore split brain
-            log_warn << "Ignoring possible split-brain "
+            log_info << "Ignoring possible split-brain "
                      << "(allowed by configuration) from view:\n"
                      << current_view_ << "\nto view:\n" << view;
         }
         else if (closing_ == false && ignore_quorum_ == true)
         {
             // configured to ignore lack of quorum
-            log_warn << "Ignoring lack of quorum "
+            log_info << "Ignoring lack of quorum "
                      << "(allowed by configuration) from view:\n"
                      << current_view_ << "\nto view:\n" << view;
         }
@@ -964,7 +979,8 @@ bool gcomm::pc::Proto::is_prim() const
 
         if (last_prim_uuids.empty() == true)
         {
-            log_warn << "no nodes coming from prim view, prim not possible";
+            log_info << "No nodes coming from primary view, "
+                     << "primary view is not possible";
             return false;
         }
 
@@ -1641,7 +1657,9 @@ int gcomm::pc::Proto::handle_down(Datagram& dg, const ProtoDownMeta& dm)
     }
     else if (ret != EAGAIN)
     {
-        log_warn << "Proto::handle_down: " << strerror(ret);
+        log_warn << "Got unexpected error code from send in "
+                    "pc::Proto::handle_down(): "
+                 << ret;
     }
 
     pop_header(um, dg);

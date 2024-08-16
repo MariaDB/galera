@@ -62,7 +62,6 @@ new_component (gcs_group_t* group, const gcs_comp_msg_t* comp)
 START_TEST (gcs_group_configuration)
 {
     ssize_t     ret;
-    gcs_group_t group;
     gcs_seqno_t seqno = 11;
 
     // The Action
@@ -131,8 +130,8 @@ START_TEST (gcs_group_configuration)
 
     // ready
     gu::Config cnf;
-    gcs_group_register(&cnf);
-    gcs_group_init (&group, &cnf, NULL, "my node", "my addr", 0, 0, 0);
+    gcs_group::register_params(cnf);
+    gcs_group_t group(cnf, NULL, "my node", "my addr", 0, 0, 0);
     ck_assert(!gcs_group_is_primary(&group));
     ck_assert(group.num == 0);
 
@@ -397,7 +396,6 @@ START_TEST (gcs_group_configuration)
     ret = new_component (&group, comp);
     ck_assert(ret >= 0);
     gcs_comp_msg_delete (comp);
-    gcs_group_free(&group);
 }
 END_TEST
 
@@ -491,9 +489,8 @@ END_TEST
 START_TEST(test_gcs_group_find_donor)
 {
     gu::Config cnf;
-    gcs_group_register(&cnf);
-    gcs_group_t group;
-    gcs_group_init(&group, &cnf, NULL, "", "", 0, 0, 0);
+    gcs_group::register_params(cnf);
+    gcs_group_t group(cnf, NULL, "", "", 0, 0, 0);
     const char* s_group_uuid = "0d0d0d0d-0d0d-0d0d-0d0d-0d0d0d0d0d0d";
     gu_uuid_scan(s_group_uuid, strlen(s_group_uuid), &group.group_uuid);
 
@@ -592,8 +589,6 @@ START_TEST(test_gcs_group_find_donor)
     nodes[1].status = GCS_NODE_STATE_SYNCED;
     nodes[2].status = GCS_NODE_STATE_SYNCED;
 #undef SARGS
-
-    gcs_group_free(&group);
 }
 END_TEST
 

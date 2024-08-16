@@ -5,6 +5,7 @@
 #include "galera_common.hpp"
 #include "replicator_smm.hpp"
 #include "gcs_action_source.hpp"
+#include "gcs_error.hpp"
 #include "galera_exception.hpp"
 
 #include "galera_info.hpp"
@@ -315,7 +316,6 @@ galera::ReplicatorSMM::~ReplicatorSMM()
     delete as_;
 }
 
-
 wsrep_status_t galera::ReplicatorSMM::connect(const std::string& cluster_name,
                                               const std::string& cluster_url,
                                               const std::string& state_donor,
@@ -348,14 +348,14 @@ wsrep_status_t galera::ReplicatorSMM::connect(const std::string& cluster_name,
 
     if (ret == WSREP_OK && (err = gcs_.set_initial_position(inpos)) != 0)
     {
-        log_error << "gcs init failed:" << strerror(-err);
+        log_error << "gcs init failed:" << gcs_error_str(-err);
         ret = WSREP_NODE_FAIL;
     }
 
     if (ret == WSREP_OK &&
         (err = gcs_.connect(cluster_name, cluster_url, bootstrap)) != 0)
     {
-        log_error << "gcs connect failed: " << strerror(-err);
+        log_error << "gcs connect failed: " << gcs_error_str(-err);
         ret = WSREP_NODE_FAIL;
     }
 
@@ -1590,8 +1590,8 @@ wsrep_status_t galera::ReplicatorSMM::sync_wait(wsrep_gtid_t* upto,
         }
         catch (gu::Exception& e)
         {
-            log_warn << "gcs_caused() returned " << -e.get_errno()
-                     << " (" << strerror(e.get_errno()) << ")";
+            log_debug << "gcs_caused() returned " << -e.get_errno()
+                      << " (" << strerror(e.get_errno()) << ")";
             return WSREP_TRX_FAIL;
         }
     }
@@ -1689,7 +1689,7 @@ wsrep_status_t galera::ReplicatorSMM::wait_nbo_end(TrxHandleMaster* trx,
     else if (err < 0)
     {
         log_error << "Failed to send NBO-end: " << err << ": "
-                  << ::strerror(-err);
+                  << gcs_error_str(-err);
         return WSREP_NODE_FAIL;
     }
 
@@ -1960,7 +1960,8 @@ galera::ReplicatorSMM::preordered_commit(wsrep_po_handle_t&         handle,
 
         if (rcode < 0)
             gu_throw_error(-rcode)
-                << "Replication of preordered writeset failed.";
+                << "Replication of preordered writeset failed: "
+                << gcs_error_str(-rcode);
     }
 
     delete ws; // cleanup regardless of commit flag
@@ -2281,7 +2282,7 @@ void galera::ReplicatorSMM::process_vote(wsrep_seqno_t const seqno_g,
         default:        /* general error */
             assert(ret < 0);
             msg << "Failed to vote on request for " << gtid << ": "
-                << -ret << " (" << ::strerror(-ret) << "). "
+                << -ret << " (" << gcs_error_str(-ret) << "). "
                 "Assuming inconsistency";
             goto fail;
         }
@@ -3075,8 +3076,9 @@ void galera::ReplicatorSMM::process_join(wsrep_seqno_t seqno_j,
     if (seqno_j < 0 && S_JOINING == state_())
     {
         // #595, @todo: find a way to re-request state transfer
-        log_fatal << "Failed to receive state transfer: " << seqno_j
-                  << " (" << strerror (-seqno_j) << "), need to restart.";
+        log_fatal << "Failed to receive state transfer: " << seqno_j << " ("
+                  << gcs_state_transfer_error_str(-seqno_j)
+                  << "), need to restart.";
         abort();
     }
     else
@@ -3191,7 +3193,7 @@ void galera::ReplicatorSMM::desync()
 
     if (ret)
     {
-        gu_throw_error (-ret) << "Node desync failed.";
+        gu_throw_error(-ret) << gcs_error_str(-ret);
     }
 }
 

@@ -22,6 +22,7 @@ set(GCS_SOURCES
   gcs_fc.cpp
   gcs.cpp
   gcs_gcomm.cpp
+  gcs_error.cpp
   )
 
 #

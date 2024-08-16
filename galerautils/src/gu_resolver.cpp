@@ -246,7 +246,7 @@ out:
     if (fd == -1)
     {
         err = errno;
-        gu_throw_error(err) << "could not create socket";
+        gu_throw_system_error(err) << "could not create socket";
     }
     if ((err = ioctl(fd, GU_SIOCGIFCONF, &ifc)) == -1)
     {
@@ -290,7 +290,7 @@ out:
 #endif /* !__APPLE__ && !__FreeBSD__ */
     if (err != 0)
     {
-        gu_throw_error(err) << "failed to get interface index";
+        gu_throw_system_error(err) << "failed to get interface index";
     }
     else
     {
@@ -465,7 +465,7 @@ std::string gu::net::Addrinfo::to_string() const
 
     if (inet_ntop(get_family(), addr.get_addr(), dst, sizeof(dst)) == 0)
     {
-        gu_throw_error(errno) << "inet ntop failed";
+        gu_throw_system_error(errno) << "inet ntop failed";
     }
 
     switch (get_family())

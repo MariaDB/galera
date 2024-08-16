@@ -38,8 +38,8 @@ namespace gu
     {
         if (!mapped)
         {
-            gu_throw_error(errno) << "mmap() on '" << fd.name()
-                                  << "' failed";
+            gu_throw_system_error(errno)
+                << "mmap() on '" << fd.name() << "' failed";
         }
 
 #if defined(MADV_DONTFORK)
@@ -93,8 +93,8 @@ namespace gu
 
         if (::msync(sync_addr, sync_length, MS_SYNC) < 0)
         {
-            gu_throw_error(errno) << "msync(" << sync_addr << ", "
-                                  << sync_length << ") failed";
+            gu_throw_system_error(errno)
+                << "msync(" << sync_addr << ", " << sync_length << ") failed";
         }
     }
 
@@ -110,8 +110,8 @@ namespace gu
     {
         if (munmap (ptr, size) < 0)
         {
-            gu_throw_error(errno) << "munmap(" << ptr << ", " << size
-                                  << ") failed";
+            gu_throw_system_error(errno)
+                << "munmap(" << ptr << ", " << size << ") failed";
         }
 
         mapped = false;

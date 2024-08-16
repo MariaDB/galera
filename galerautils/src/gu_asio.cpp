@@ -333,7 +333,7 @@ namespace
 
             if (ifs.good() == false)
             {
-                gu_throw_error(errno) <<
+                gu_throw_system_error(errno) <<
                     "could not open password file '" << file << "'";
             }
 
