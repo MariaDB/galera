@@ -104,6 +104,7 @@ target_compile_options(galera_smm
   )
 
 if (GALERA_VERSION_SCRIPT)
+if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
   # Limit symbols visible from Galera DSO.
   # Doing this allows to:
   # - make the ABI more clean and concise
@@ -112,6 +113,7 @@ if (GALERA_VERSION_SCRIPT)
   # See: https://akkadia.org/drepper/dsohowto.pdf (section 2.2.5)
   set(GALERA_LINK_OPTIONS
     -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/galera-sym.map)
+endif()
 endif()
 
 target_link_libraries(galera_smm galera ${GALERA_LINK_OPTIONS})

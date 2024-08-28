@@ -143,6 +143,40 @@ static void bind(Socket& socket, const gu::AsioIpAddress& addr)
     }
 }
 
+#ifdef __APPLE__
+
+template <class Socket>
+static struct tcp_info get_tcp_info(Socket& socket)
+{
+    struct tcp_info tcpi;
+    memset(&tcpi, 0, sizeof(tcpi));
+    // struct tcp_connection_info
+    // https://developer.apple.com/documentation/kernel/tcp_connection_info
+    // http://git.haproxy.org/?p=haproxy-2.6.git;a=commitdiff_plain;h=7747d465d54a1e367e9bf9c07c263d7f1f7fd481;hp=5c83e3a1563cd7face299bf08037e51f976eb5e3
+    // TODO needed fields:
+    //  ret.rtt            = tcpi.tcpi_rtt;
+    //  ret.rttvar         = tcpi.tcpi_rttvar;
+    //  ret.rto            = tcpi.tcpi_rto;
+#if defined(__linux__)
+    //  ret.lost           = tcpi.tcpi_lost;
+#else
+    //  ret.lost           = 0;
+#endif /* __linux__ */
+    //  ret.last_data_recv = tcpi.tcpi_last_data_recv;
+    //  ret.cwnd           = tcpi.tcpi_snd_cwnd;
+    //  gu::datetime::Date now(gu::datetime::Date::monotonic());
+    //  Critical<AsioProtonet> crit(net_);
+    //  ret.last_queued_since = (now - last_queued_tstamp_).get_nsecs();
+    //  ret.last_delivered_since = (now - last_delivered_tstamp_).get_nsecs();
+    //  ret.send_queue_length = send_q_.size();
+    //  ret.send_queue_bytes = send_q_.queued_bytes();
+    //  ret.send_queue_segments = send_q_.segments();
+
+    return tcpi;
+}
+
+#else
+
 template <class Socket>
 static struct tcp_info get_tcp_info(Socket& socket)
 {
@@ -165,7 +199,7 @@ static struct tcp_info get_tcp_info(Socket& socket)
 #endif /* __linux__ || __FreeBSD__ */
     return tcpi;
 }
-
+#endif
 
 static inline std::string
 uri_string (const std::string& scheme, const std::string& addr,

@@ -54,12 +54,12 @@ gu_clock_diff (clock_t left, clock_t right)
 /* Maximum date representable by long long and compatible with timespec */
 #define GU_TIME_ETERNITY 9223372035999999999LL
 
-#if defined(__APPLE__) /* synced with linux/time.h */
-# define CLOCK_REALTIME  0
-# define CLOCK_MONOTONIC 1
-typedef int clockid_t;
-int clock_gettime (clockid_t clk_id, struct timespec * tp);
-#endif /* __APPLE__ */
+// #if defined(__APPLE__) /* synced with linux/time.h */
+// # define CLOCK_REALTIME  0
+// # define CLOCK_MONOTONIC 1
+// typedef int clockid_t;
+// int clock_gettime (clockid_t clk_id, struct timespec * tp);
+// #endif /* __APPLE__ */
 
 static inline long long
 gu_time_getres()

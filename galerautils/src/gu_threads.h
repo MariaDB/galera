@@ -11,8 +11,6 @@
 
 #include "gu_types.h" // bool
 
-#if __unix__
-
 #include <pthread.h>
 #include <assert.h>
 
@@ -317,8 +315,6 @@ typedef pthread_barrier_t      gu_barrier_t_SYS;
 #define GU_BARRIER_SERIAL_THREAD_SYS PTHREAD_BARRIER_SERIAL_THREAD
 
 #endif /* native POSIX barriers */
-
-#endif /* __unix__ */
 
 /**
  *  Depending on compile-time flags application will either use
