@@ -33,7 +33,7 @@ target_link_libraries(gcache galerautilsxx)
 
 add_executable(gcache_test test.cpp)
 
-target_link_libraries(gcache_test gcache pthread rt)
+target_link_libraries(gcache_test gcache pthread)
 
 target_compile_options(gcache_test
   PRIVATE
