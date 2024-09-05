@@ -60,10 +60,10 @@ BuildRequires: openssl-devel
 %endif
 %endif
 
-%if 0%{?rhel} == 8
-BuildRequires: python3-scons
+%if 0%{?rhel} == 7
+BuildRequires: cmake3
 %else
-BuildRequires: scons
+BuildRequires: cmake
 %endif
 
 %if 0%{?suse_version} == 1110
