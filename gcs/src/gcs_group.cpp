@@ -61,6 +61,7 @@ gcs_group_init (gcs_group_t* group, gu::Config* const cnf, gcache_t* const cache
                 int const appl_proto_ver)
 {
     // here we also create default node instance.
+    new (&group->memb_mtx_) gu::Mutex(NULL);
     group->cache        = cache;
     group->act_id_      = GCS_SEQNO_ILL;
     group->conf_id      = GCS_SEQNO_ILL;
@@ -185,8 +186,13 @@ gcs_group_free (gcs_group_t* group)
     if (group->my_address) free ((char*)group->my_address);
     delete group->vote_history;
 
-    gu::Lock lock(group->memb_mtx_);
-    group_nodes_free (group);
+    {
+        gu::Lock lock(group->memb_mtx_);
+        group_nodes_free (group);
+    }
+
+    // manually release memb_mtx_ after placement-new.
+    group->memb_mtx_.~Mutex();
 }
 
 /* Reset nodes array without breaking the statistics */
