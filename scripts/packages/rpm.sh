@@ -62,6 +62,9 @@ then
   DIST_TAG=".${ID:-unknown}${VERSION_ID%%.*}"
 fi
 
+# no cmake3 installed? Pretend the build dependency is cmake
+rpm -q cmake3 || sed -i -e 's/cmake3/cmake/' "$GALERA_SPEC"
+
 $(which rpmbuild) --clean --define "_topdir $RPM_TOP_DIR" \
                   --define "optflags $RPM_OPT_FLAGS" \
                   --define "version $1" \
