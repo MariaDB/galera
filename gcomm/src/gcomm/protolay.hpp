@@ -287,7 +287,6 @@ public:
     {
         if (down_context_.empty() == true)
         {
-            log_warn << this << " down context(s) not set";
             return ENOTCONN;
         }
 

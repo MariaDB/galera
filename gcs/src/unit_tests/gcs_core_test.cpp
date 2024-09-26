@@ -543,7 +543,7 @@ test_api(bool const enc)
     while (i--) {
         long     frags    = (act_size - 1)/FRAG_SIZE + 1;
 
-        gu_info ("Iteration %ld: act: %s, size: %zu, frags: %ld",
+        gu_info ("Iteration %ld: act: %p, size: %zu, frags: %ld",
                  i, act, act_size, frags);
 
         ck_assert(!CORE_SEND_START (&act_s));

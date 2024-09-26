@@ -49,7 +49,7 @@ SavedState::SavedState  (const std::string& file) :
 
     if (!fs_)
     {
-        gu_throw_error(errno)
+        gu_throw_system_error(errno)
             << "Could not open state file for writing: '" << file
             << "'. Check permissions and/or disk space.";
     }

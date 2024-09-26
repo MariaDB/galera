@@ -29,6 +29,15 @@ namespace galera
         void register_params(gu::Config& conf);
 
 
+        struct Result
+        {
+            int error;
+            std::string error_str;
+            Result(int error_arg, const std::string& error_str_arg)
+                : error{error_arg}
+                , error_str{error_str_arg}
+            { }
+        };
         // IST event handler interface
         class EventHandler
         {
@@ -40,7 +49,7 @@ namespace galera
             virtual void ist_cc(const gcs_act_cchange&,const gcs_action&,
                                 bool must_apply, bool preload) = 0;
             // Report IST end
-            virtual void ist_end(int error) = 0;
+            virtual void ist_end(const Result&) = 0;
         protected:
             virtual ~EventHandler() {}
         };

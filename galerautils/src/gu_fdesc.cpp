@@ -124,7 +124,7 @@ namespace gu
 
             if (ftruncate(fd_, size_))
             {
-                gu_throw_error(errno) << "Failed to truncate '" << name_
+                gu_throw_system_error(errno) << "Failed to truncate '" << name_
                                       << "' to " << size_ << " bytes.";
             }
         }
@@ -138,7 +138,8 @@ namespace gu
     FileDescriptor::constructor_common()
     {
         if (fd_ < 0) {
-            gu_throw_error(errno) << "Failed to open file '" + name_ + '\'';
+            gu_throw_system_error(errno)
+                << "Failed to open file '" + name_ + '\'';
         }
 #if !defined(__APPLE__) /* Darwin does not have posix_fadvise */
 /* benefits are questionable
@@ -180,7 +181,7 @@ namespace gu
         log_debug << "Flushing file '" << name_ << "'";
 
         if (fsync (fd_) < 0) {
-            gu_throw_error(errno) << "fsync() failed on '" + name_ + '\'';
+            gu_throw_system_error(errno) << "fsync() failed on '" + name_ + '\'';
         }
 
         log_debug << "Flushed file '" << name_ << "'";
@@ -192,10 +193,12 @@ namespace gu
         byte_t const byte (0);
 
         if (lseek (fd_, offset, SEEK_SET) != offset)
-            gu_throw_error(errno) << "lseek() failed on '" << name_ << '\'';
+            gu_throw_system_error(errno)
+                << "lseek() failed on '" << name_ << '\'';
 
         if (write (fd_, &byte, sizeof(byte)) != sizeof(byte))
-            gu_throw_error(errno) << "write() failed on '" << name_ << '\'';
+            gu_throw_system_error(errno)
+                << "write() failed on '" << name_ << '\'';
 
         return true;
     }
@@ -221,7 +224,7 @@ namespace gu
             return;
         }
 
-        gu_throw_error (errno) << "File preallocation failed";
+        gu_throw_system_error (errno) << "File preallocation failed";
     }
 
     void
@@ -248,7 +251,7 @@ namespace gu
             }
             else
             {
-                gu_throw_error (errno) << "File preallocation failed";
+                gu_throw_system_error (errno) << "File preallocation failed";
             }
         }
     }

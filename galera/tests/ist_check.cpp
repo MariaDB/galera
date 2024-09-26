@@ -314,7 +314,8 @@ namespace
 
         ~ISTHandler() {}
 
-        void ist_trx(const TrxHandleSlavePtr& ts, bool must_apply, bool preload)
+        void ist_trx(const TrxHandleSlavePtr& ts, bool must_apply,
+                     bool preload) override
         {
             assert(ts != 0);
             ts->verify_checksum();
@@ -341,7 +342,7 @@ namespace
         }
 
         void ist_cc(const gcs_act_cchange& cc, const gcs_action& act,
-                    bool must_apply, bool preload)
+                    bool must_apply, bool preload) override
         {
             assert(act.seqno_g == cc.seqno);
 
@@ -357,11 +358,11 @@ namespace
             seqno_ = cc.seqno;
         }
 
-        void ist_end(int error)
+        void ist_end(const ist::Result& result) override
         {
-            log_info << "IST ended with status: " << error;
+            log_info << "IST ended with status: " << result.error_str;
             gu::Lock lock(mutex_);
-            error_ = error;
+            error_ = result.error;
             eof_ = true;
             cond_.signal();
         }

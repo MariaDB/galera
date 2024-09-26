@@ -355,7 +355,6 @@ galera::ist::Receiver::prepare(wsrep_seqno_t const first_seqno,
     return recv_addr_;
 }
 
-
 void galera::ist::Receiver::run()
 {
     auto socket(acceptor_->accept());
@@ -365,6 +364,7 @@ void galera::ist::Receiver::run()
     gu::Progress<wsrep_seqno_t>* progress(NULL);
 
     int ec(0);
+    std::ostringstream error_os;
 
     try
     {
@@ -410,9 +410,8 @@ void galera::ist::Receiver::run()
                 assert(!progress);
                 if (act.seqno_g > first_seqno_)
                 {
-                    log_error
-                        << "IST started with wrong seqno: " << act.seqno_g
-                        << ", expected <= " << first_seqno_;
+                    error_os << "IST started with wrong seqno: " << act.seqno_g
+                             << ", expected <= " << first_seqno_;
                     ec = EINVAL;
                     goto err;
                 }
@@ -438,8 +437,8 @@ void galera::ist::Receiver::run()
 
             if (act.seqno_g != current_seqno_)
             {
-                log_error << "Unexpected action seqno: " << act.seqno_g
-                          << " expected: " << current_seqno_;
+                error_os << "Unexpected action seqno: " << act.seqno_g
+                         << " expected: " << current_seqno_;
                 ec = EINVAL;
                 goto err;
             }
@@ -508,7 +507,7 @@ void galera::ist::Receiver::run()
         ec = e.get_errno();
         if (ec != EINTR)
         {
-            log_error << "got exception while reading IST stream: " << e.what();
+            error_os << "got exception while reading IST stream: " << e.what();
         }
     }
 
@@ -518,17 +517,18 @@ err:
     socket->close();
 
     running_ = false;
-    if (last_seqno_ > 0 && ec != EINTR && current_seqno_ < last_seqno_)
+    if (last_seqno_ > 0 && ec != EINTR && current_seqno_ < last_seqno_ &&
+        error_os.tellp() == 0)
     {
-        log_error << "IST didn't contain all write sets, expected last: "
-                  << last_seqno_ << " last received: " << current_seqno_;
+        error_os << "IST didn't contain all write sets, expected last: "
+                 << last_seqno_ << " last received: " << current_seqno_;
         ec = EPROTO;
     }
     if (ec != EINTR)
     {
         error_code_ = ec;
     }
-    handler_.ist_end(ec);
+    handler_.ist_end(Result{ec, error_os.str()});
 }
 
 
@@ -803,7 +803,7 @@ void galera::ist::AsyncSenderMap::run(const gu::Config&   conf,
     if (err != 0)
     {
         delete as;
-        gu_throw_error(err) << "failed to start sender thread";
+        gu_throw_system_error(err) << "failed to start sender thread";
     }
     senders_.insert(as);
 }

@@ -68,7 +68,7 @@ void gu::AsioStreamReact::open(const gu::URI& uri) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value())
+    gu_throw_system_error(e.code().value())
         << "error opening stream socket " << uri;
 }
 
@@ -78,7 +78,7 @@ bool gu::AsioStreamReact::is_open() const try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value())
+    gu_throw_system_error(e.code().value())
         << "error checking if socket is open ";
     return false;
 }
@@ -105,7 +105,7 @@ void gu::AsioStreamReact::bind(const gu::AsioIpAddress& addr) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error in binding";
+    gu_throw_system_error(e.code().value()) << "error in binding";
 }
 
 void gu::AsioStreamReact::async_connect(
@@ -127,7 +127,7 @@ void gu::AsioStreamReact::async_connect(
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error connecting ";
+    gu_throw_system_error(e.code().value()) << "error connecting ";
 }
 
 
@@ -149,7 +149,7 @@ void gu::AsioStreamReact::async_write(
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Async write failed '"
+    gu_throw_system_error(e.code().value()) << "Async write failed '"
                                      << e.what();
 }
 
@@ -169,7 +169,7 @@ void gu::AsioStreamReact::async_read(
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Async read failed '"
+    gu_throw_system_error(e.code().value()) << "Async read failed '"
                                      << e.what();
 }
 
@@ -178,7 +178,7 @@ static void throw_sync_op_error(const gu::AsioStreamEngine& engine,
 {
     auto last_error(engine.last_error());
     if (last_error.is_system())
-        gu_throw_error(last_error.value()) << prefix
+        gu_throw_system_error(last_error.value()) << prefix
                                            << ": " << last_error.message();
     else
         gu_throw_error(EPROTO) << prefix
@@ -215,7 +215,7 @@ void gu::AsioStreamReact::connect(const gu::URI& uri) try
 }
 catch (asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to connect '"
+    gu_throw_system_error(e.code().value()) << "Failed to connect '"
                                      << uri << "': " << e.what();
 }
 
@@ -242,7 +242,7 @@ size_t gu::AsioStreamReact::write(const AsioConstBuffer& buf) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to write: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to write: " << e.what();
 }
 
 size_t gu::AsioStreamReact::read(const AsioMutableBuffer& buf) try
@@ -277,7 +277,7 @@ size_t gu::AsioStreamReact::read(const AsioMutableBuffer& buf) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to read: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to read: " << e.what();
 }
 
 std::string gu::AsioStreamReact::local_addr() const
@@ -297,7 +297,7 @@ void gu::AsioStreamReact::set_receive_buffer_size(size_t size) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error setting receive buffer size";
+    gu_throw_system_error(e.code().value()) << "error setting receive buffer size";
 }
 
 size_t gu::AsioStreamReact::get_receive_buffer_size() try
@@ -306,7 +306,7 @@ size_t gu::AsioStreamReact::get_receive_buffer_size() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error getting receive buffer size ";
+    gu_throw_system_error(e.code().value()) << "error getting receive buffer size ";
 }
 
 void gu::AsioStreamReact::set_send_buffer_size(size_t size) try
@@ -316,7 +316,7 @@ void gu::AsioStreamReact::set_send_buffer_size(size_t size) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error setting send buffer size";
+    gu_throw_system_error(e.code().value()) << "error setting send buffer size";
 }
 
 size_t gu::AsioStreamReact::get_send_buffer_size() try
@@ -325,7 +325,7 @@ size_t gu::AsioStreamReact::get_send_buffer_size() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error getting send buffer size";
+    gu_throw_system_error(e.code().value()) << "error getting send buffer size";
 }
 
 struct tcp_info gu::AsioStreamReact::get_tcp_info() try
@@ -334,7 +334,7 @@ struct tcp_info gu::AsioStreamReact::get_tcp_info() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error getting TCP info";
+    gu_throw_system_error(e.code().value()) << "error getting TCP info";
 }
 
 
@@ -871,7 +871,7 @@ void gu::AsioAcceptorReact::open(const gu::URI& uri) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to open acceptor: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to open acceptor: " << e.what();
 }
 
 
@@ -891,7 +891,7 @@ void gu::AsioAcceptorReact::listen(const gu::URI& uri) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to listen: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to listen: " << e.what();
 }
 
 void gu::AsioAcceptorReact::close() try
@@ -904,7 +904,7 @@ void gu::AsioAcceptorReact::close() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to close acceptor: "
+    gu_throw_system_error(e.code().value()) << "Failed to close acceptor: "
                                      << e.what();
 }
 
@@ -925,7 +925,7 @@ void gu::AsioAcceptorReact::async_accept(
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to accept: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to accept: " << e.what();
 }
 
 
@@ -965,7 +965,7 @@ std::shared_ptr<gu::AsioSocket> gu::AsioAcceptorReact::accept() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to accept: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to accept: " << e.what();
 }
 
 std::string gu::AsioAcceptorReact::listen_addr() const try
@@ -977,7 +977,7 @@ std::string gu::AsioAcceptorReact::listen_addr() const try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value())
+    gu_throw_system_error(e.code().value())
         << "failed to read listen addr "
         << "', asio error '" << e.what() << "'";
 }
@@ -988,7 +988,7 @@ unsigned short gu::AsioAcceptorReact::listen_port() const try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value())
+    gu_throw_system_error(e.code().value())
         << "failed to read listen port "
         << "', asio error '" << e.what() << "'";
 }
@@ -1000,7 +1000,7 @@ void gu::AsioAcceptorReact::set_receive_buffer_size(size_t size) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error setting receive buffer size";
+    gu_throw_system_error(e.code().value()) << "error setting receive buffer size";
 }
 
 
@@ -1010,7 +1010,7 @@ size_t gu::AsioAcceptorReact::get_receive_buffer_size() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error getting receive buffer size";
+    gu_throw_system_error(e.code().value()) << "error getting receive buffer size";
     return 0;
 }
 
@@ -1021,7 +1021,7 @@ void gu::AsioAcceptorReact::set_send_buffer_size(size_t size) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error setting send buffer size";
+    gu_throw_system_error(e.code().value()) << "error setting send buffer size";
 }
 
 size_t gu::AsioAcceptorReact::get_send_buffer_size() try
@@ -1030,7 +1030,7 @@ size_t gu::AsioAcceptorReact::get_send_buffer_size() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "error getting send buffer size";
+    gu_throw_system_error(e.code().value()) << "error getting send buffer size";
     return 0;
 }
 

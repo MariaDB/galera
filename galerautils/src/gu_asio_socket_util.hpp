@@ -38,7 +38,7 @@ static void set_fd_options(S& socket)
     long flags(FD_CLOEXEC);
     if (fcntl(native_socket_handle(socket), F_SETFD, flags) == -1)
     {
-        gu_throw_error(errno) << "failed to set FD_CLOEXEC";
+        gu_throw_system_error(errno) << "failed to set FD_CLOEXEC";
     }
 }
 
@@ -58,7 +58,7 @@ static void set_receive_buffer_size(Socket& socket, size_t size)
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "Failed to set receive buffer size: "
             << e.what();
     }
@@ -75,7 +75,7 @@ static size_t get_receive_buffer_size(Socket& socket)
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "Failed to get receive buffer size: "
             << e.what();
     }
@@ -90,7 +90,7 @@ static void set_send_buffer_size(Socket& socket, size_t size)
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "Failed to set send buffer size: "
             << e.what();
     }
@@ -107,7 +107,7 @@ static size_t get_send_buffer_size(Socket& socket)
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "Failed to get send buffer size: "
             << e.what();
     }
@@ -137,7 +137,7 @@ static void bind(Socket& socket, const gu::AsioIpAddress& addr)
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "Failed bind socket to address: "
             << e.what();
     }
@@ -159,8 +159,8 @@ static struct tcp_info get_tcp_info(Socket& socket)
     if (getsockopt(native_fd, level, TCP_INFO, &tcpi, &tcpi_len))
     {
         int err(errno);
-        gu_throw_error(err) << "Failed to read TCP info from socket: "
-                            << strerror(err);
+        gu_throw_system_error(err) << "Failed to read TCP info from socket: "
+                                   << strerror(err);
     }
 #endif /* __linux__ || __FreeBSD__ */
     return tcpi;

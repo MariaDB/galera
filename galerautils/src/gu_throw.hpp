@@ -46,6 +46,7 @@ namespace gu
         ThrowBase& operator= (const ThrowBase&);
 
         friend class ThrowError;
+        friend class ThrowSystemError;
         friend class ThrowFatal;
     };
 
@@ -64,7 +65,38 @@ namespace gu
 
         ~ThrowError() GU_NOEXCEPT(false) GU_NORETURN
         {
-            base.os << ": " << err << " (" << ::strerror(err) << ')';
+            Exception e(base.os.str(), err);
+
+            e.trace (base.file, base.func, base.line);
+            // cppcheck-suppress exceptThrowInDestructor
+            throw e;
+        }
+
+        std::ostringstream& msg () { return base.os; }
+
+    private:
+
+        ThrowBase base;
+        int const err;
+    };
+
+    /* final */ class ThrowSystemError
+    {
+    public:
+
+        ThrowSystemError (const char* file_,
+                          const char* func_,
+                          int         line_,
+                          int         err_)
+          :
+            base (file_, func_, line_),
+            err  (err_)
+        {}
+
+        ~ThrowSystemError() GU_NOEXCEPT(false) GU_NORETURN
+        {
+            base.os << ": System error: " << err << " (" << ::strerror(err)
+                    << ')';
 
             Exception e(base.os.str(), err);
 
@@ -113,6 +145,9 @@ namespace gu
 
 #define gu_throw_error(err_)                                    \
     gu::ThrowError(__FILE__, __FUNCTION__, __LINE__, err_).msg()
+
+#define gu_throw_system_error(err_)                             \
+    gu::ThrowSystemError(__FILE__, __FUNCTION__, __LINE__, err_).msg()
 
 #define gu_throw_fatal                                          \
     gu::ThrowFatal(__FILE__, __FUNCTION__, __LINE__).msg()

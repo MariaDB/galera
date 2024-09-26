@@ -1498,7 +1498,7 @@ wsrep_seqno_t galera_pause (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_warn << "Node pause failed: " << e.what();
         return -e.get_errno();
     }
 }
@@ -1519,7 +1519,7 @@ wsrep_status_t galera_resume (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_error << "Node resume failed: " << e.what();
         return WSREP_NODE_FAIL;
     }
 }
@@ -1540,7 +1540,7 @@ wsrep_status_t galera_desync (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_warn << "Node desync failed: " << e.what();
         return WSREP_TRX_FAIL;
     }
 }
@@ -1561,7 +1561,7 @@ wsrep_status_t galera_resync (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_error << "Node resync failed: " << e.what();
         return WSREP_NODE_FAIL;
     }
 }
