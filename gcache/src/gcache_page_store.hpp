@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2022 Codership Oy <info@codership.com>
+ * Copyright (C) 2010-2024 Codership Oy <info@codership.com>
  */
 
 /*! @file page store class */
@@ -83,6 +83,10 @@ namespace gcache
         void  reset();
 
         void  set_enc_key(const Page::EncKey& key);
+
+        void  seqno_lock(seqno_t) {}
+
+        void  seqno_unlock() {}
 
         void  set_page_size (size_t size) { page_size_ = size; }
 
