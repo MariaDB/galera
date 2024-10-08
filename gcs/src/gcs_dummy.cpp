@@ -167,7 +167,7 @@ GCS_BACKEND_RECV_FN(dummy_recv)
         }
         else {
             ret = -EBADFD; // closing
-            gu_debug ("Returning %d: %s", ret, strerror(-ret));
+            gu_debug ("Returning %ld: %s", ret, strerror(-ret));
         }
     }
     else {
@@ -189,7 +189,7 @@ GCS_BACKEND_MSG_SIZE_FN(dummy_msg_size)
     const long max_pkt_size = backend->conn->max_pkt_size;
 
     if (pkt_size > max_pkt_size) {
-        gu_warn ("Requested packet size: %d, maximum possible packet size: %d",
+        gu_warn ("Requested packet size: %ld, maximum possible packet size: %ld",
                  pkt_size, max_pkt_size);
         return (max_pkt_size - backend->conn->hdr_size);
     }
@@ -230,7 +230,7 @@ GCS_BACKEND_OPEN_FN(dummy_open)
         }
         gcs_comp_msg_delete (comp);
     }
-    gu_debug ("Opened backend connection: %d (%s)", ret, strerror(-ret));
+    gu_debug ("Opened backend connection: %ld (%s)", ret, strerror(-ret));
     return ret;
 }
 

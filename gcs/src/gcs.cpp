@@ -16,6 +16,7 @@
 #include "gcs_fifo_lite.hpp"
 #include "gcs_sm.hpp"
 #include "gcs_gcache.hpp"
+#include "gcs_error.hpp"
 
 #include <galerautils.h>
 #include <gu_logger.hpp>
@@ -29,6 +30,8 @@
 #include <math.h>
 #include <errno.h>
 #include <assert.h>
+
+#include <cinttypes>
 
 const char* gcs_node_state_to_str (gcs_node_state_t state)
 {
@@ -426,7 +429,7 @@ gcs_check_error (int err, const char* warning)
     case -ENOTCONN:
     case -ECONNABORTED:
         if (NULL != warning) {
-            gu_warn ("%s: %d (%s)", warning, err, strerror(-err));
+            gu_info ("%s: %d (%s)", warning, err, gcs_error_str(-err));
         }
         err = 0;
         break;
@@ -456,7 +459,7 @@ gcs_fc_stop_begin (gcs_conn_t* conn)
                 !(err = gu_mutex_lock (&conn->fc_lock)));
 
     if (gu_unlikely(err)) {
-            gu_fatal ("Mutex lock failed: %d (%s)", err, strerror(err));
+            gu_fatal ("Mutex lock failed: %ld (%s)", err, strerror(err));
             abort();
     }
 
@@ -491,7 +494,8 @@ gcs_fc_stop_end (gcs_conn_t* conn)
             conn->stop_sent_dec(1);
         }
 
-        gu_debug ("SENDING FC_STOP (local seqno: %lld, fc_offset: %ld): %d",
+        gu_debug("SENDING FC_STOP (local seqno: %" PRId64
+                 ", fc_offset: %ld): %d",
                  conn->local_act_id, conn->fc_offset, ret);
     }
     else
@@ -521,7 +525,7 @@ gcs_fc_cont_begin (gcs_conn_t* conn)
                 !(err = gu_mutex_lock (&conn->fc_lock)));
 
     if (gu_unlikely(err)) {
-        gu_fatal ("Mutex lock failed: %d (%s)", err, strerror(err));
+        gu_fatal ("Mutex lock failed: %ld (%s)", err, strerror(err));
         abort();
     }
 
@@ -553,7 +557,8 @@ gcs_fc_cont_end (gcs_conn_t* conn)
             conn->stop_sent_inc(1);
         }
 
-        gu_debug ("SENDING FC_CONT (local seqno: %lld, fc_offset: %ld): %d",
+        gu_debug("SENDING FC_CONT (local seqno: %" PRId64
+                 ", fc_offset: %ld): %d",
                  conn->local_act_id, conn->fc_offset, ret);
     }
     else
@@ -661,16 +666,17 @@ gcs_shift_state (gcs_conn_t*      const conn,
 
     if (!allowed[new_state][old_state]) {
         if (old_state != new_state) {
-            gu_warn ("GCS: Shifting %s -> %s is not allowed (TO: %lld)",
-                     gcs_conn_state_str[old_state],
-                     gcs_conn_state_str[new_state], conn->global_seqno);
+            gu_warn("GCS: Shifting %s -> %s is not allowed (TO: %" PRId64 ")",
+                    gcs_conn_state_str[old_state],
+                    gcs_conn_state_str[new_state], conn->global_seqno);
         }
         return false;
     }
 
     if (old_state != new_state) {
-        gu_info ("Shifting %s -> %s (TO: %lld)", gcs_conn_state_str[old_state],
-                 gcs_conn_state_str[new_state], conn->global_seqno);
+        gu_info("Shifting %s -> %s (TO: %" PRId64 ")",
+                gcs_conn_state_str[old_state], gcs_conn_state_str[new_state],
+                conn->global_seqno);
         conn->state = new_state;
     }
 
@@ -740,8 +746,8 @@ gcs_become_primary (gcs_conn_t* conn)
     int ret;
 
     if ((ret = _release_flow_control (conn))) {
-        gu_fatal ("Failed to release flow control: %ld (%s)",
-                  ret, strerror(ret));
+        gu_fatal ("Failed to release flow control: %d (%s)",
+                  ret, gcs_error_str(ret));
         gcs_close (conn);
         abort();
     }
@@ -794,7 +800,7 @@ gcs_become_donor (gcs_conn_t* conn)
                         -EPROTO);
         if (err < 0 && !(err == -ENOTCONN || err == -EBADFD)) {
             gu_fatal ("Failed to send State Transfer Request rejection: "
-                      "%zd (%s)", err, (strerror (-err)));
+                      "%zd (%s)", err, (gcs_error_str (-err)));
             assert (0);
             return -ENOTRECOVERABLE; // failed to clear donor status,
         }
@@ -849,8 +855,8 @@ gcs_become_joined (gcs_conn_t* conn)
     if (GCS_CONN_JOINER == conn->state) {
         ret = _release_sst_flow_control (conn);
         if (ret < 0) {
-            gu_fatal ("Releasing SST flow control failed: %ld (%s)",
-                      ret, strerror (-ret));
+            gu_fatal ("Releasing SST flow control failed: %d (%s)",
+                      ret, gcs_error_str (-ret));
             abort();
         }
         conn->timeout = GU_TIME_ETERNITY;
@@ -865,7 +871,7 @@ gcs_become_joined (gcs_conn_t* conn)
         gu_debug("Become joined, FC offset %ld", conn->fc_offset);
         /* One of the cases when the node can become SYNCED */
         if ((ret = gcs_send_sync (conn))) {
-            gu_warn ("Sending SYNC failed: %ld (%s)", ret, strerror (-ret));
+            gu_warn ("Sending SYNC failed: %d (%s)", ret, gcs_error_str(-ret));
         }
     }
     else {
@@ -958,11 +964,12 @@ s_join (gcs_conn_t* conn)
         switch (err)
         {
         case -ENOTCONN:
-            gu_warn ("Sending JOIN failed: %d (%s). "
-                     "Will retry in new primary component.", err,strerror(-err));
+            gu_info("Sending JOIN failed: %s. "
+                    "Will retry in new primary component.",
+                    gcs_error_str(-err));
             return 0;
         default:
-            gu_error ("Sending JOIN failed: %d (%s).", err, strerror(-err));
+            gu_error("Sending JOIN failed: %d (%s).", err, gcs_error_str(-err));
             return err;
         }
     }
@@ -1107,7 +1114,7 @@ gcs_handle_act_conf (gcs_conn_t* conn, gcs_act_rcvd& rcvd)
     }
 
     if (old_state != conn->state) {
-        gu_info ("Restored state %s -> %s (%lld)",
+        gu_info ("Restored state %s -> %s (%" PRId64 ")",
                  gcs_conn_state_str[old_state], gcs_conn_state_str[conn->state],
                  conn->global_seqno);
     }
@@ -1116,7 +1123,7 @@ gcs_handle_act_conf (gcs_conn_t* conn, gcs_act_rcvd& rcvd)
     case GCS_CONN_JOINED:
         /* One of the cases when the node can become SYNCED */
         if ((ret = gcs_send_sync(conn)) < 0) {
-            gu_warn ("CC: sending SYNC failed: %ld (%s)", ret, strerror (-ret));
+            gu_warn ("CC: sending SYNC failed: %ld (%s)", ret, gcs_error_str (-ret));
         }
     break;
     case GCS_CONN_JOINER:
@@ -1138,7 +1145,7 @@ gcs_handle_act_state_req (gcs_conn_t*          conn,
 {
     if ((gcs_seqno_t)conn->my_idx == rcvd.id) {
         int const donor_idx = (int)rcvd.id; // to pacify valgrind
-        gu_debug("Got GCS_ACT_STATE_REQ to %i, my idx: %ld",
+        gu_debug("Got GCS_ACT_STATE_REQ to %i, my idx: %d",
                  donor_idx, conn->my_idx);
         // rewrite to pass global seqno for application
         rcvd.id = conn->global_seqno;
@@ -1157,7 +1164,7 @@ static long
 gcs_handle_state_change (gcs_conn_t*           conn,
                          const struct gcs_act* act)
 {
-    gu_debug ("Got '%s' dated %lld", gcs_act_type_to_str (act->type),
+    gu_debug ("Got '%s' dated %" PRId64, gcs_act_type_to_str (act->type),
               gcs_seqno_gtoh(*(gcs_seqno_t*)act->buf));
 
     void* buf = malloc (act->buf_len);
@@ -1389,7 +1396,7 @@ _close(gcs_conn_t* conn, bool join_recv_thread)
             /* if called from gcs_close(), we need to synchronize with
                gcs_recv_thread at this point */
             if ((ret = gu_thread_join (conn->recv_thread, NULL))) {
-                gu_error ("Failed to join recv_thread(): %d (%s)",
+                gu_error ("Failed to join recv_thread(): %ld (%s)",
                           -ret, strerror(-ret));
             }
             else {
@@ -1455,7 +1462,8 @@ static void *gcs_recv_thread (void *arg)
 
         if (gu_unlikely(ret <= 0)) {
 
-            gu_debug ("gcs_core_recv returned %d: %s", ret, strerror(-ret));
+            gu_debug("gcs_core_recv returned %zd: %s", ret,
+                     gcs_error_str(-ret));
 
             if (-ETIMEDOUT == ret && _handle_timeout(conn)) continue;
 
@@ -1502,7 +1510,7 @@ static void *gcs_recv_thread (void *arg)
             }
             if (gu_unlikely(ret < 0))
             { // error
-                gu_debug ("gcs_handle_actions returned %d: %s",
+                gu_debug ("gcs_handle_actions returned %zd: %s",
                           ret, strerror(-ret));
                 break;
             }
@@ -1576,8 +1584,8 @@ static void *gcs_recv_thread (void *arg)
                 }
 
                 if (gu_unlikely(send_stop) && (ret = gcs_fc_stop_end(conn))) {
-                    gu_error ("gcs_fc_stop() returned %d: %s",
-                              ret, strerror(-ret));
+                    gu_error ("gcs_fc_stop() returned %zd: %s",
+                              ret, gcs_error_str(-ret));
                     break;
                 }
             }
@@ -1605,7 +1613,7 @@ static void *gcs_recv_thread (void *arg)
         else if (conn->my_idx == rcvd.sender_idx)
         {
             gu_debug("Discarding: unordered local action not in repl_q: "
-                     "{ {%p, %zd, %s}, %d, %lld }.",
+                     "{ {%p, %zd, %s}, %d, %" PRId64 " }.",
                      rcvd.act.buf, rcvd.act.buf_len,
                      gcs_act_type_to_str(rcvd.act.type), rcvd.sender_idx,
                      rcvd.id);
@@ -1613,7 +1621,7 @@ static void *gcs_recv_thread (void *arg)
         else
         {
             gu_fatal ("Protocol violation: unordered remote action: "
-                      "{ {%p, %zd, %s}, %d, %lld }",
+                      "{ {%p, %zd, %s}, %d, % " PRId64 " }",
                       rcvd.act.buf, rcvd.act.buf_len,
                       gcs_act_type_to_str(rcvd.act.type), rcvd.sender_idx,
                       rcvd.id);
@@ -1632,7 +1640,7 @@ static void *gcs_recv_thread (void *arg)
         (void)_close(conn, false);
         gcs_shift_state (conn, GCS_CONN_CLOSED);
     }
-    gu_info ("RECV thread exiting %d: %s", ret, strerror(-ret));
+    gu_info ("RECV thread exiting %zd: %s", ret, strerror(-ret));
     return NULL;
 }
 
@@ -1649,7 +1657,7 @@ long gcs_open (gcs_conn_t* conn, const char* channel, const char* url,
 
     if ((ret = gcs_sm_enter (conn->sm, &tmp_cond, false, true)))
     {
-        gu_error("Failed to enter send monitor: %d (%s)", ret, strerror(-ret));
+        gu_error("Failed to enter send monitor: %ld (%s)", ret, strerror(-ret));
         return ret;
     }
 
@@ -1678,7 +1686,7 @@ long gcs_open (gcs_conn_t* conn, const char* channel, const char* url,
             gcs_core_close (conn->core);
         }
         else {
-            gu_error ("Failed to open channel '%s' at '%s': %d (%s)",
+            gu_error ("Failed to open channel '%s' at '%s': %ld (%s)",
                       channel, url, ret, strerror(-ret));
         }
     }
@@ -1712,7 +1720,7 @@ long gcs_close (gcs_conn_t *conn)
         /* _close() has already been called by gcs_recv_thread() and it
            is taking care of cleanup, just join the thread */
         if ((ret = gu_thread_join (conn->recv_thread, NULL))) {
-            gu_error ("Failed to join recv_thread(): %d (%s)",
+            gu_error ("Failed to join recv_thread(): %ld (%s)",
                       -ret, strerror(-ret));
         }
         else {
@@ -1757,7 +1765,7 @@ long gcs_destroy (gcs_conn_t *conn)
          * to acquire the lock and give up gracefully */
     }
     else {
-        gu_debug("gcs_destroy: gcs_sm_enter() err = %d", err);
+        gu_debug("gcs_destroy: gcs_sm_enter() err = %ld", err);
         // We should still cleanup resources
     }
 
@@ -1767,12 +1775,12 @@ long gcs_destroy (gcs_conn_t *conn)
     gcs_sm_destroy (conn->sm);
 
     if ((err = gcs_fifo_lite_destroy (conn->repl_q))) {
-        gu_debug ("Error destroying repl FIFO: %d (%s)", err, strerror(-err));
+        gu_debug ("Error destroying repl FIFO: %ld (%s)", err, strerror(-err));
         return err;
     }
 
     if ((err = gcs_core_destroy (conn->core))) {
-        gu_debug ("Error destroying core: %d (%s)", err, strerror(-err));
+        gu_debug ("Error destroying core: %ld (%s)", err, strerror(-err));
         return err;
     }
 
@@ -1906,9 +1914,10 @@ long gcs_replv (gcs_conn_t*          const conn,      //!<in
 
                 if (ret < 0) {
                     /* remove item from the queue, it will never be delivered */
-                    gu_warn ("Send action {%p, %zd, %s} returned %d (%s)",
-                             act->buf, act->size,gcs_act_type_to_str(act->type),
-                             ret, strerror(-ret));
+                    gu_debug(
+                        "Send action {%p, %" PRId32 ", %s} returned %ld (%s)",
+                        act->buf, act->size, gcs_act_type_to_str(act->type),
+                        ret, gcs_error_str(-ret));
 
                     if (!gcs_fifo_lite_remove (conn->repl_q)) {
                         gu_fatal ("Failed to remove unsent item from repl_q");
@@ -1958,7 +1967,7 @@ long gcs_replv (gcs_conn_t*          const conn,      //!<in
 
                     if (orig_buf != act->buf) // action was allocated in gcache
                     {
-                        gu_debug("Freeing gcache buffer %p after receiving %d",
+                        gu_debug("Freeing gcache buffer %p after receiving %ld",
                                  act->buf, ret);
                         gcs_gcache_free (conn->gcache, act->buf);
                         act->buf = orig_buf;
@@ -2144,19 +2153,19 @@ long gcs_recv (gcs_conn_t*        conn,
             if (conn->queue_len > 0) {
                 gu_warn ("Failed to send CONT message: %d (%s). "
                          "Attempts left: %ld",
-                         err, strerror(-err), conn->queue_len);
+                         err, gcs_error_str(-err), conn->queue_len);
             }
             else {
                 gu_fatal ("Last opportunity to send CONT message failed: "
                           "%d (%s). Aborting to avoid cluster lock-up...",
-                          err, strerror(-err));
+                          err, gcs_error_str(-err));
                 gcs_close(conn);
                 gu_abort();
             }
         }
         else if (gu_unlikely(send_sync) && (err = gcs_send_sync_end (conn))) {
             gu_warn ("Failed to send SYNC message: %d (%s). Will try later.",
-                     err, strerror(-err));
+                     err, gcs_error_str(-err));
         }
 
         return action->size;

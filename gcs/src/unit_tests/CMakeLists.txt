@@ -35,6 +35,7 @@ add_executable(gcs_tests
   ../gcs_params.cpp
   gcs_fc_test.cpp
   ../gcs_fc.cpp
+  ../gcs_error.cpp
   )
 
 target_compile_definitions(gcs_tests

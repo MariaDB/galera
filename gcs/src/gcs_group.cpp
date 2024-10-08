@@ -8,6 +8,7 @@
 #include "gcs_gcache.hpp"
 #include "gcs_priv.hpp"
 #include "gcs_code_msg.hpp"
+#include "gcs_error.hpp"
 
 #include <gu_logger.hpp>
 #include <gu_macros.hpp>
@@ -19,6 +20,7 @@
 
 #include <errno.h>
 
+#include <cinttypes>
 #include <limits>
 
 std::string const GCS_VOTE_POLICY_KEY("gcs.vote_policy");
@@ -150,7 +152,7 @@ group_nodes_init (const gcs_group_t* group, const gcs_comp_msg_t* comp)
         }
     }
     else {
-        gu_error ("Could not allocate %ld x %z bytes", nodes_num,
+        gu_error ("Could not allocate %ld x %zu bytes", nodes_num,
                   sizeof(gcs_node_t));
     }
     return ret;
@@ -492,10 +494,10 @@ group_post_state_exchange (gcs_group_t* group)
     gu_info ("Quorum results:"
              "\n\tversion    = %u,"
              "\n\tcomponent  = %s,"
-             "\n\tconf_id    = %lld,"
-             "\n\tmembers    = %d/%d (joined/total),"
-             "\n\tact_id     = %lld,"
-             "\n\tlast_appl. = %lld,"
+             "\n\tconf_id    = %" PRId64 ","
+             "\n\tmembers    = %ld/%ld (joined/total),"
+             "\n\tact_id     = %" PRId64 ","
+             "\n\tlast_appl. = %" PRId64 ","
              "\n\tprotocols  = %d/%d/%d (gcs/repl/appl),"
              "\n\tvote policy= %d,"
              "\n\tgroup UUID = " GU_UUID_FORMAT,
@@ -555,7 +557,7 @@ gcs_group_handle_comp_msg (gcs_group_t* group, const gcs_comp_msg_t* comp)
         new_nodes = group_nodes_init (group, comp);
 
         if (!new_nodes) {
-            gu_fatal ("Could not allocate memory for %ld-node component.",
+            gu_fatal ("Could not allocate memory for %d-node component.",
                       gcs_comp_msg_num (comp));
             assert(0);
             return (gcs_group_state_t)-ENOMEM;
@@ -711,7 +713,7 @@ gcs_group_handle_uuid_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
     }
     else {
         gu_warn ("Stray state UUID msg: " GU_UUID_FORMAT
-                 " from node %ld (%s), current group state %s",
+                 " from node %d (%s), current group state %s",
                  GU_UUID_ARGS((gu_uuid_t*)msg->buf),
                  msg->sender_idx, group->nodes[msg->sender_idx].name,
                  gcs_group_state_str[group->state]);
@@ -749,7 +751,7 @@ gcs_group_handle_state_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
             }
             else {
                 gu_debug ("STATE EXCHANGE: stray state msg: " GU_UUID_FORMAT
-                          " from node %ld (%s), current state UUID: "
+                          " from node %d (%s), current state UUID: "
                           GU_UUID_FORMAT,
                           GU_UUID_ARGS(state_uuid),
                           msg->sender_idx, gcs_state_msg_name(state),
@@ -760,7 +762,7 @@ gcs_group_handle_state_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
             }
         }
         else {
-            gu_warn ("Could not parse state message from node %d",
+            gu_warn ("Could not parse state message from node %d, %s",
                      msg->sender_idx, group->nodes[msg->sender_idx].name);
         }
     }
@@ -854,7 +856,7 @@ gcs_group_handle_last_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
         group_redo_last_applied (group);
 
         if (old_val < group->last_applied) {
-            gu_debug ("New COMMIT CUT %lld on %d after %lld from %d",
+            gu_debug ("New COMMIT CUT %lld on %ld after %lld from %d",
                       (long long)group->last_applied, group->my_idx,
                       (long long)gtid.seqno(), msg->sender_idx);
             return group->last_applied;
@@ -1200,15 +1202,16 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
             }
         }
 
-        if (j == group->num) {
-            gu_warn ("Could not find peer: %s", peer_id);
+        if (j == group->num && strlen(peer_id)) {
+            /* This can happen if the 'peer' is no longer in group. */
+            gu_info ("Could not find peer: %s", peer_id);
         }
 
         if (code < 0) {
-            gu_warn ("%d.%d (%s): State transfer %s %d.%d (%s) failed: %d (%s)",
+            gu_warn ("%d.%d (%s): State transfer %s %d.%d (%s) failed: %s",
                      sender_idx, sender->segment, sender->name, st_dir,
                      peer_idx, peer ? peer->segment : -1, peer_name,
-                     (int)code, strerror((int)-code));
+                     gcs_state_transfer_error_str((int)-code));
 
             if (from_donor && peer_idx == group->my_idx &&
                 GCS_NODE_STATE_JOINER == group->nodes[peer_idx].status) {
@@ -1250,8 +1253,14 @@ gcs_group_handle_join_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
             gu_warn("Rejecting JOIN message from %d.%d (%s): new State Transfer"
                     " required.", sender_idx, sender->segment, sender->name);
         }
-        else {
-            // should we freak out and throw an error?
+        else if (GCS_NODE_STATE_SYNCED != sender->status &&
+                 GCS_NODE_STATE_JOINED != sender->status) {
+            /* According to comments in gcs_join(), sending of JOIN messages
+             * is always allowed when not in JOINER state. This may lead to
+             * duplicate joins of which some can be received in JOINED or
+             * SYNCED state. This is expected, so the warning is not printed if
+             * the state is JOINED or SYNCED, but we'll keep it for other
+             * states to catch possible errors in sender logic. */
             gu_warn("Protocol violation. JOIN message sender %d.%d (%s) is not "
                     "in state transfer (%s). Message ignored.",
                     sender_idx, sender->segment, sender->name,
@@ -1358,7 +1367,7 @@ group_find_node_by_state (const gcs_group_t* const group,
     /* Have not found suitable donor in the same segment. */
     if (!hnss && donor >= 0) {
         if (joiner_idx == group->my_idx) {
-            gu_warn ("There are no nodes in the same segment that will ever "
+            gu_info ("There are no nodes in the same segment that will ever "
                      "be able to become donors, yet there is a suitable donor "
                      "outside. Will use that one.");
         }
@@ -1700,7 +1709,6 @@ gcs_group_find_donor(const gcs_group_t* group,
     return donor_idx;
 }
 
-
 /*!
  * Selects and returns the index of state transfer donor, if available.
  * Updates donor and joiner status if state transfer is possible
@@ -1780,12 +1788,24 @@ group_select_donor (gcs_group_t* group,
             assert(true == desync);
         }
     }
-    else {
-        gu_warn ("Member %d.%d (%s) requested state transfer from '%s', "
-                 "but it is impossible to select State Transfer donor: %s",
-                 joiner_idx, group->nodes[joiner_idx].segment,
-                 group->nodes[joiner_idx].name,
-                 required_donor ? donor_string : "*any*", strerror (-donor_idx));
+    else if (-donor_idx == EAGAIN) {
+        /* In case of EAGAIN the failure of selecting the donor is
+         * transient, and donor selection may succeed when the request is
+         * retried by the Joiner. Therefore print info level message
+         * instead of warning. */
+        gu_info("Member %d.%d (%s) requested state transfer from '%s', "
+                "but it is impossible to select State Transfer donor: %s",
+                joiner_idx, group->nodes[joiner_idx].segment,
+                group->nodes[joiner_idx].name,
+                required_donor ? donor_string : "*any*",
+                gcs_state_transfer_error_str(-donor_idx));
+    } else {
+        gu_warn("Member %d.%d (%s) requested state transfer from '%s', "
+                "but it is impossible to select State Transfer donor: %s",
+                joiner_idx, group->nodes[joiner_idx].segment,
+                group->nodes[joiner_idx].name,
+                required_donor ? donor_string : "*any*",
+                gcs_state_transfer_error_str(-donor_idx));
     }
 
     return donor_idx;
@@ -1796,7 +1816,7 @@ void
 gcs_group_ignore_action (gcs_group_t* group, struct gcs_act_rcvd* act)
 {
     gu_debug("Ignoring action: buf: %p, len: %zd, type: %d, sender: %d, "
-             "seqno: %lld", act->act.buf, act->act.buf_len, act->act.type,
+             "seqno: %" PRId64, act->act.buf, act->act.buf_len, act->act.type,
              act->sender_idx, act->id);
 
     if (gcs_act_in_cache(act->act.type)) {

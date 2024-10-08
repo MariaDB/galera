@@ -68,7 +68,7 @@ namespace gu
             mtx_.owned_  = gu_thread_self();
 #endif /* GU_MUTEX_DEBUG */
 
-            if (gu_unlikely(ret)) gu_throw_error(ret);
+            if (gu_unlikely(ret)) gu_throw_system_error(ret);
         }
 #if defined(GU_DEBUG_MUTEX) || defined(GU_MUTEX_DEBUG)
         bool owns_lock() const

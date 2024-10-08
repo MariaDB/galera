@@ -7,6 +7,7 @@
 #include "gcs_node.hpp"
 #include "gcs_state_msg.hpp"
 #include <stdlib.h>
+#include <cinttypes>
 
 #include <gu_utils.hpp> // gu::PrintBase
 
@@ -192,10 +193,10 @@ gcs_node_update_status (gcs_node_t* node, const gcs_state_quorum_t* quorum)
             else {
                 // gap in sequence numbers, needs a snapshot, demote status
                 if (node->status > GCS_NODE_STATE_PRIM) {
-                    gu_info ("'%s' demoted %s->PRIMARY due to gap in history: "
-                             "%lld - %lld",
-                             node->name, gcs_node_state_to_str(node->status),
-                             node_act_id, quorum->act_id);
+                    gu_info("'%s' demoted %s->PRIMARY due to gap in history: "
+                            "%" PRId64 " - %" PRId64,
+                            node->name, gcs_node_state_to_str(node->status),
+                            node_act_id, quorum->act_id);
                 }
                 node->status = GCS_NODE_STATE_PRIM;
             }

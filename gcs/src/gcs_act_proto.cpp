@@ -85,7 +85,7 @@ gcs_act_proto_read (gcs_act_frag_t* frag, const void* buf, size_t buf_len)
     frag->proto_ver = ((uint8_t*)buf)[PROTO_PV_OFFSET];
 
     if (gu_unlikely(buf_len < PROTO_DATA_OFFSET)) {
-        gu_error ("Action message too short: %zu, expected at least %d",
+        gu_error ("Action message too short: %zu, expected at least %zu",
                   buf_len, PROTO_DATA_OFFSET);
         return -EBADMSG;
     }

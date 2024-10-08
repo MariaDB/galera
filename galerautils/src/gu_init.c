@@ -18,7 +18,7 @@ gu_init (gu_log_cb_t log_cb)
     size_t const page_size = GU_PAGE_SIZE;
     if (page_size & (page_size - 1))
     {
-        gu_fatal("GU_PAGE_SIZE(%z) is not a power of 2", GU_PAGE_SIZE);
+        gu_fatal("GU_PAGE_SIZE(%zu) is not a power of 2", GU_PAGE_SIZE);
         gu_abort();
     }
 

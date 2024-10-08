@@ -282,9 +282,9 @@ void gcomm::gmcast::Proto::handle_ok(const Message& hs)
 
 void gcomm::gmcast::Proto::handle_failed(const Message& hs)
 {
-    log_warn << "handshake with " << remote_uuid_ << " "
-             << remote_addr_ << " failed: '"
-             << hs.error() << "'";
+    log_debug << "handshake with " << remote_uuid_ << " "
+              << remote_addr_ << " failed: '"
+              << hs.error() << "'";
     set_state(S_FAILED);
     if (hs.error() == gmcast_proto_err_evicted)
     {
@@ -300,7 +300,7 @@ void gcomm::gmcast::Proto::handle_failed(const Message& hs)
     {
         if (gmcast_.prim_view_reached())
         {
-            log_warn << "Received duplicate UUID error from other node "
+            log_info << "Received duplicate UUID error from other node "
                      << "while in primary component. This may mean that "
                      << "this node's IP address has changed. Will close "
                      << "connection and keep on retrying";

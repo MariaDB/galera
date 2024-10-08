@@ -201,10 +201,10 @@ namespace galera
 
         // IST Action handler interface
         void ist_trx(const TrxHandleSlavePtr& ts, bool must_apply,
-                     bool preload);
+                     bool preload) override;
         void ist_cc(const gcs_act_cchange&, const gcs_action&, bool must_apply,
-                    bool preload);
-        void ist_end(int error);
+                    bool preload) override;
+        void ist_end(const ist::Result&) override;
 
         // Cancel local and enter apply monitors for TrxHandle
         void cancel_monitors_for_local(const TrxHandleSlave& ts)
@@ -282,15 +282,15 @@ namespace galera
                 mutex_(gu::get_mutex_key(gu::GU_MUTEX_KEY_IST_EVENT_QUEUE)),
                 cond_(gu::get_cond_key(gu::GU_COND_KEY_IST_EVENT_QUEUE)),
                 eof_(false),
-                error_(0),
+                result_(0, ""),
                 queue_()
             { }
-            void reset() { eof_ = false; error_ = 0; }
-            void eof(int error)
+            void reset() { eof_ = false; result_ = ist::Result{0, ""}; }
+            void eof(const ist::Result& result)
             {
                 gu::Lock lock(mutex_);
                 eof_ = true;
-                error_ = error;
+                result_ = result;
                 cond_.broadcast();
             }
 
@@ -331,12 +331,14 @@ namespace galera
                 }
                 else
                 {
-                    if (error_)
+                    if (result_.error)
                     {
-                        int err(error_);
-                        error_ = 0; // Make just one thread to detect the failure
+                        int err(result_.error);
+                        // Make just one thread to detect the failure
+                        result_.error = 0;
                         gu_throw_error(err)
-                            << "IST receiver reported failure";
+                            << "IST receiver reported failure: '"
+                            << result_.error_str << "' (" << err << ")";
                     }
                 }
 
@@ -347,7 +349,7 @@ namespace galera
             gu::Mutex mutex_;
             gu::Cond  cond_;
             bool eof_;
-            int error_;
+            ist::Result result_;
             std::queue<ISTEvent> queue_;
         };
 
@@ -919,7 +921,7 @@ namespace galera
                                      ssize_t             sst_req_len);
 
         /* resume reception of GCS events */
-        void resume_recv() { gcs_.resume_recv(); ist_end(0); }
+        void resume_recv() { gcs_.resume_recv(); ist_end(ist::Result{0, ""}); }
 
         /* These methods facilitate closing procedure.
          * They must be called under closing_mutex_ lock */

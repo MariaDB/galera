@@ -674,7 +674,7 @@ void gcomm::evs::Proto::isolate(gu::datetime::Period period)
 void gcomm::evs::Proto::handle_install_timer()
 {
     gcomm_assert(state() == S_GATHER || state() == S_INSTALL);
-    log_warn << self_string() << " install timer expired";
+    log_info << self_string() << " install timer expired";
 
     bool is_cons(consensus_.is_consensus());
     bool is_repr(is_representative(uuid()));
@@ -2621,7 +2621,6 @@ int gcomm::evs::Proto::handle_down(Datagram& wb, const ProtoDownMeta& dm)
 
     else if (state() != S_OPERATIONAL)
     {
-        log_warn << "user message in state " << to_string(state());
         return ENOTCONN;
     }
 
