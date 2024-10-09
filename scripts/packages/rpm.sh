@@ -22,7 +22,7 @@ fast_cflags="-O3 -fno-omit-frame-pointer"
 uname -m | grep -q i686 && \
 cpu_cflags="-mtune=i686" || cpu_cflags="-mtune=core2"
 RPM_OPT_FLAGS="$fast_cflags $cpu_cflags"
-GALERA_SPEC=$SCRIPT_ROOT/galera.spec
+GALERA_SPEC=$SCRIPT_ROOT/galera-4.spec
 
 RELEASE=${RELEASE:-"1"}
 
@@ -65,7 +65,7 @@ fi
 # no cmake3 installed? Pretend the build dependency is cmake
 rpm -q cmake3 || sed -i -e 's/cmake3/cmake/' "$GALERA_SPEC"
 
-$(which rpmbuild) --clean --define "_topdir $RPM_TOP_DIR" \
+rpmbuild --clean --define "_topdir $RPM_TOP_DIR" \
                   --define "optflags $RPM_OPT_FLAGS" \
                   --define "version $1" \
                   --define "dist ${DIST_TAG}" \
