@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2019 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2024 Codership Oy <info@codership.com>
  */
 
 #include "gmcast.hpp"
@@ -584,6 +584,16 @@ void gcomm::GMCast::gmcast_connect(const std::string& remote_addr)
         segment_,
         group_name_);
 
+    std::ostringstream os;
+    os << peer->remote_uuid().full_str();
+    log_info << ":::JAN:::gcomm::GMCast::gmcast_connect";
+    gu::connection_monitor_connect((wsrep_connection_key_t)tp->id(),
+                                   get_scheme(pnet_, use_ssl_, dynamic_socket_),
+                                   peer->local_addr(),
+                                   os.str(),
+                                   remote_addr);
+
+
     std::pair<ProtoMap::iterator, bool> ret =
         proto_map_->insert(std::make_pair(tp->id(), peer));
 
@@ -675,6 +685,15 @@ void gcomm::GMCast::handle_established(Proto* est)
              << est->remote_addr();
     // UUID checks are handled during protocol handshake
     assert(est->remote_uuid() != uuid());
+
+    std::ostringstream os;
+    os << est->remote_uuid().full_str();
+    log_info << ":::JAN::: gcomm::GMCast::handle_established";
+    gu::connection_monitor_connect((wsrep_connection_key_t)est->socket()->id(),
+                                   get_scheme(pnet_, use_ssl_, dynamic_socket_),
+                                   est->local_addr(),
+                                   os.str(),
+                                   est->remote_addr());
 
     if (is_evicted(est->remote_uuid()))
     {

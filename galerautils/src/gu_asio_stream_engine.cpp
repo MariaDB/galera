@@ -90,6 +90,10 @@ public:
     {
         return gu::AsioErrorCode(last_error_, gu_asio_system_category);
     }
+
+    virtual void get_SSL_info(std::string &chipher, std::string &subject,
+                              std::string &issuer, std::string &version) GALERA_OVERRIDE {}
+
 private:
     void clear_error() { last_error_ = 0; }
     int fd_;
@@ -99,7 +103,7 @@ private:
 #ifdef GALERA_HAVE_SSL
 
 #include <openssl/ssl.h>
-
+#include <openssl/x509.h>
 #if OPENSSL_VERSION_NUMBER >= 0x1010100fL
 #define HAVE_READ_EX
 #define HAVE_WRITE_EX
@@ -185,6 +189,21 @@ public:
                                  *last_error_category_ :
                                  gu_asio_system_category,
                                  last_verify_error_);
+    }
+
+    virtual void get_SSL_info(std::string &chipher, std::string &subject,
+                              std::string &issuer, std::string &version) GALERA_OVERRIDE
+    {
+        clear_error();
+        chipher = SSL_get_cipher(ssl_);
+        X509 *ssl_cert = SSL_get_peer_certificate(ssl_);
+        if (ssl_cert != nullptr)
+        {
+            subject = X509_NAME_oneline(X509_get_subject_name(ssl_cert), 0, 0);
+            issuer = X509_NAME_oneline(X509_get_issuer_name(ssl_cert), 0, 0);
+            X509_free(ssl_cert);
+        }
+        version = SSL_get_version(ssl_);
     }
 
 private:
@@ -560,6 +579,9 @@ public:
         return engine_->last_error();
     }
 
+    virtual void get_SSL_info(std::string &chipher, std::string &subject,
+                              std::string &issuer, std::string &version) GALERA_OVERRIDE {}
+
 private:
     bool socket_poll(long msec)
     {
@@ -687,6 +709,9 @@ public:
         return gu::AsioErrorCode(last_error_value_, last_error_category_,
                                  &stream_);
     }
+
+    virtual void get_SSL_info(std::string &chipher, std::string &subject,
+                              std::string &issuer, std::string &version) GALERA_OVERRIDE {}
 private:
 
     enum op_status map_status(enum wsrep_tls_result status)

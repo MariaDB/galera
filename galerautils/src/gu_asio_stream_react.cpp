@@ -91,6 +91,8 @@ void gu::AsioStreamReact::close() try
     {
         GU_ASIO_DEBUG(debug_print() << "Socket not open on close");
     }
+
+    gu::connection_monitor_disconnect((wsrep_connection_key_t)this);
     socket_.close();
 }
 // Catch all the possible exceptions here, not only asio ones.
@@ -198,11 +200,32 @@ void gu::AsioStreamReact::connect(const gu::URI& uri) try
     socket_.connect(resolve_result->endpoint());
     connected_ = true;
     prepare_engine(false);
+    assign_addresses();
+
     auto result(engine_->client_handshake());
     switch (result)
     {
     case AsioStreamEngine::success:
+    {
+        gu::connection_monitor_connect((wsrep_connection_key_t)this,
+                                       scheme_,
+                                       local_addr_,
+                                       "", // remote uuid
+                                       remote_addr_);
+#ifdef GALERA_HAVE_SSL
+	if (engine_->scheme() == gu::scheme::ssl)
+	{
+	  std::string chipher, issuer, subject, version;
+	  engine_->get_SSL_info(chipher, issuer, subject, version);
+	  gu::connection_monitor_ssl_info((wsrep_connection_key_t)this,
+                                          chipher,
+                                          issuer,
+                                          subject,
+                                          version);
+	}
+#endif
         return;
+    }
     case AsioStreamEngine::want_read:
     case AsioStreamEngine::want_write:
     case AsioStreamEngine::eof:
@@ -389,6 +412,25 @@ void gu::AsioStreamReact::connect_handler(
     set_socket_options(socket_);
     prepare_engine(true);
     assign_addresses();
+
+    gu::connection_monitor_connect((wsrep_connection_key_t)this,
+                                   scheme_,
+                                   local_addr_,
+                                   "", // remote uuid
+                                   remote_addr_);
+
+#ifdef GALERA_HAVE_SSL
+	if (engine_->scheme() == gu::scheme::ssl)
+	{
+	  std::string chipher, issuer, subject, version;
+	  engine_->get_SSL_info(chipher, issuer, subject, version);
+	  gu::connection_monitor_ssl_info((wsrep_connection_key_t)this,
+                                          chipher,
+                                          issuer,
+                                          subject,
+                                          version);
+	}
+#endif
     GU_ASIO_DEBUG(debug_print()
                   << " AsioStreamReact::connect_handler: init handshake");
     auto result(engine_->client_handshake());

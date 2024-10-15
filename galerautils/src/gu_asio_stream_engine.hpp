@@ -117,6 +117,12 @@ namespace gu
             AsioIoService&, const std::string& scheme, int fd,
             bool non_blocking);
 
+        /**
+         * Fetch SSL/TLS information
+         */
+        virtual void get_SSL_info(std::string &chipher, std::string &subject,
+                                  std::string &issuer, std::string &version) = 0;
+
     protected:
         AsioStreamEngine() { }
     };

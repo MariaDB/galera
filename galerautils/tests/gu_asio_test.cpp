@@ -98,6 +98,9 @@ public:
         }
     }
 
+    virtual void get_SSL_info(std::string &chipher, std::string &subject,
+                              std::string &issuer, std::string &version) GALERA_OVERRIDE {}
+
     enum op_status next_result;
     int next_error;
     size_t count_client_handshake_called;
