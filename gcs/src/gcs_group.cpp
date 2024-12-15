@@ -60,6 +60,7 @@ gcs_group::gcs_group(gu::Config&  cnf,
                      gcache_t*    cache,
                      const char*  node_name, ///< can be null
                      const char*  inc_addr,  ///< can be null
+                     bool         enc,
                      gcs_proto_t  gcs_proto_ver,
                      int          repl_proto_ver,
                      int          appl_proto_ver)

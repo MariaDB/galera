@@ -131,7 +131,7 @@ START_TEST (gcs_group_configuration)
     // ready
     gu::Config cnf;
     gcs_group::register_params(cnf);
-    gcs_group_t group(cnf, NULL, "my node", "my addr", 0, 0, 0);
+    gcs_group_t group(cnf, NULL, "my node", "my addr", false, 0, 0, 0);
     ck_assert(!gcs_group_is_primary(&group));
     ck_assert(group.num == 0);
 
@@ -739,7 +739,7 @@ START_TEST(test_gcs_group_find_donor)
 {
     gu::Config cnf;
     gcs_group::register_params(cnf);
-    gcs_group_t group(cnf, NULL, "", "", 0, 0, 0);
+    gcs_group_t group(cnf, NULL, "", "", false, 0, 0, 0);
     const char* s_group_uuid = "0d0d0d0d-0d0d-0d0d-0d0d-0d0d0d0d0d0d";
     gu_uuid_scan(s_group_uuid, strlen(s_group_uuid), &group.group_uuid);
 

@@ -135,7 +135,7 @@ gcs_core::gcs_core(gu::Config&  conf,
     :
     config(reinterpret_cast<gu_config_t*>(&conf)),
     cache(cache),
-    group(conf, cache, node_name, inc_addr,
+    group(conf, cache, node_name, inc_addr, false,
           gcs_proto_ver, repl_proto_ver,appl_proto_ver),
     prim_comp_no(),
     state(),

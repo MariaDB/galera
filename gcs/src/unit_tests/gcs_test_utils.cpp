@@ -94,7 +94,8 @@ GcsGroup::common_ctor(const std::string& node_name,
     }
 
     group_ = new gcs_group(conf_, reinterpret_cast<gcache_t*>(gcache_),
-                           node_name, inc_addr, gver, rver, aver);
+                           node_name.c_str(), inc_addr.c_str(),
+                           enc, gver, rver, aver);
     initialized_ = true;
 }
 
