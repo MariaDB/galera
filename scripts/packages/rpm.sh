@@ -27,7 +27,13 @@ GALERA_SPEC=$SCRIPT_ROOT/galera-4.spec
 RELEASE=${RELEASE:-"1"}
 
 DISTRO_VERSION=
-if  [ -r /etc/os-release ]
+if  [ -r /etc/fedora-release ]
+then
+    DISTRO_VERSION=.fc$(rpm -qf --qf '%{version}\n' /etc/fedora-release)
+elif [ -r /etc/redhat-release ]
+then
+    DISTRO_VERSION=.el$(rpm -qf --qf '%{version}\n' /etc/redhat-release)
+elif  [ -r /etc/os-release ]
 then
     source /etc/os-release
 elif [ -r /etc/SuSE-release ]
