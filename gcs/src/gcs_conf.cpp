@@ -8,10 +8,11 @@
 #include <galerautils.h>
 
 #include "gcs.hpp"
+#include "wsrep_api.h"
 
 long gcs_conf_set_log_file     (FILE *file)
 { return gu_conf_set_log_file (file); }
-long gcs_conf_set_log_callback (void (*logger) (int, const char*))
+long gcs_conf_set_log_callback (void (*logger) (wsrep_log_level_t, const char*))
 { return gu_conf_set_log_callback (logger); }
 long gcs_conf_self_tstamp_on   ()
 { return gu_conf_self_tstamp_on (); }

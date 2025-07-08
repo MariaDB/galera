@@ -420,7 +420,7 @@ START_TEST(test_gmcast_ipv6)
     gu::ssl_register_params(conf);
     gcomm::Conf::register_params(conf);
     conf.set("base_host", "ip6-localhost");
-    gu_log_max_level = GU_LOG_DEBUG;
+    gu_log_max_level = WSREP_LOG_DEBUG;
     std::unique_ptr<gcomm::Protonet> pnet(gcomm::Protonet::create(conf));
 
     // Without scheme

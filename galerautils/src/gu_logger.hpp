@@ -16,28 +16,19 @@
 extern "C" {
 #include "gu_log.h"
 #include "gu_conf.h"
+#include "wsrep_api.h" // wsrep_log_level_t
 }
 
 namespace gu
 {
     // some portability stuff
-#ifdef _gu_log_h_
-    enum LogLevel { LOG_FATAL = GU_LOG_FATAL,
-                    LOG_ERROR = GU_LOG_ERROR,
-                    LOG_WARN  = GU_LOG_WARN,
-                    LOG_INFO  = GU_LOG_INFO,
-                    LOG_DEBUG = GU_LOG_DEBUG,
+    enum LogLevel { LOG_FATAL = WSREP_LOG_FATAL,
+                    LOG_ERROR = WSREP_LOG_ERROR,
+                    LOG_WARN  = WSREP_LOG_WARN,
+                    LOG_INFO  = WSREP_LOG_INFO,
+                    LOG_DEBUG = WSREP_LOG_DEBUG,
                     LOG_MAX };
     typedef gu_log_cb_t LogCallback;
-#else
-    enum LogLevel { LOG_FATAL,
-                    LOG_ERROR,
-                    LOG_WARN,
-                    LOG_INFO,
-                    LOG_DEBUG,
-                    LOG_MAX };
-    typedef void (*LogCallback) (int, const char*);
-#endif
 
     class Logger
     {
@@ -49,16 +40,9 @@ namespace gu
         void               prepare_default ();
         const LogLevel     level;
 
-#ifndef _gu_log_h_
-        static LogLevel    max_level;
-        static bool        do_timestamp;
-        static LogCallback logger;
-        static void        default_logger  (int, const char*);
-#else
 #define max_level          gu_log_max_level
 #define logger             gu_log_cb
 #define default_logger     gu_log_cb_default
-#endif
 
     protected:
 
@@ -71,7 +55,7 @@ namespace gu
             os     ()
         {}
 
-        virtual ~Logger() { logger (level, os.str().c_str()); }
+        virtual ~Logger() { logger ((wsrep_log_level_t) level, os.str().c_str()); }
 
         std::ostringstream& get(const char* file,
                                 const char* func,
@@ -100,11 +84,6 @@ namespace gu
 
         static bool no_debug(const std::string&, const std::string&, const int);
 
-#ifndef _gu_log_h_
-        static void enable_tstamp (bool);
-        static void enable_debug  (bool);
-        static void set_logger    (LogCallback);
-#endif
     };
 
 #define GU_LOG_CPP(level)                                               \

@@ -3614,7 +3614,7 @@ public:
 // * It is expected that the n1 ends up in non-primary component.
 START_TEST(test_quorum_2_to_2_in_3_node_cluster)
 {
-    gu_log_max_level = GU_LOG_DEBUG;
+    gu_log_max_level = WSREP_LOG_DEBUG;
     gcomm::pc::ProtoBuilder builder;
     gu::Config conf;
     gu::ssl_register_params(conf);

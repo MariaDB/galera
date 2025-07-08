@@ -4,6 +4,7 @@
 
 #include <gu_throw.hpp>
 #include <gu_conf.h>
+#include "gu_log.h"
 
 #include <cstdio>
 
@@ -24,17 +25,17 @@ namespace garb
         gu_conf_set_log_file (log_file);
     }
 
-    static void log_to_syslog (int level, const char* msg)
+    static void log_to_syslog (wsrep_log_level_t level, const char* msg)
     {
         int p = LOG_NOTICE;
 
         switch (level)
         {
-        case GU_LOG_FATAL: p = LOG_CRIT;    break;
-        case GU_LOG_ERROR: p = LOG_ERR;     break;
-        case GU_LOG_WARN:  p = LOG_WARNING; break;
-        case GU_LOG_INFO:  p = LOG_INFO;    break;
-        case GU_LOG_DEBUG: p = LOG_DEBUG;   break;
+        case WSREP_LOG_FATAL: p = LOG_CRIT;    break;
+        case WSREP_LOG_ERROR: p = LOG_ERR;     break;
+        case WSREP_LOG_WARN:  p = LOG_WARNING; break;
+        case WSREP_LOG_INFO:  p = LOG_INFO;    break;
+        case WSREP_LOG_DEBUG: p = LOG_DEBUG;   break;
         }
 
         syslog (p | LOG_DAEMON, "%s", msg);

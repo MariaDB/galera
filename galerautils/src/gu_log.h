@@ -11,6 +11,7 @@
 
 #include "gu_macros.h"
 #include <stdlib.h> /* For NULL */
+#include "wsrep_api.h"
 
 #if defined(__cplusplus)
 extern "C"
@@ -31,26 +32,17 @@ extern "C"
  * debug - debugging message.
  */
 
-typedef enum gu_log_severity
-{
-    GU_LOG_FATAL,
-    GU_LOG_ERROR,
-    GU_LOG_WARN,
-    GU_LOG_INFO,
-    GU_LOG_DEBUG
-}
-gu_log_severity_t;
 
 /**
  * @typedef
  * Defines a type of callback function that application can provide
  * to do the logging
  */
-typedef void (*gu_log_cb_t) (int severity, const char* msg);
+typedef void (*gu_log_cb_t) (wsrep_log_level_t, const char* msg);
 
 /** Helper for macros defined below. Should not be called directly. */
 extern int
-gu_log (gu_log_severity_t severity,
+gu_log (wsrep_log_level_t severity,
         const char*       file,
         const char*       function,
         const int         line,
@@ -60,9 +52,9 @@ gu_log (gu_log_severity_t severity,
 /** This variable is made global only for the purpose of using it in
  *  gu_debug() macro and avoid calling gu_log() when debug is off.
  *  Don't use it directly! */
-extern gu_log_severity_t gu_log_max_level;
+extern wsrep_log_level_t gu_log_max_level;
 
-#define gu_log_debug (GU_LOG_DEBUG == gu_log_max_level)
+#define gu_log_debug (WSREP_LOG_DEBUG == gu_log_max_level)
 
 #if defined(__cplusplus)
 }
@@ -76,17 +68,17 @@ extern gu_log_severity_t gu_log_max_level;
  */
 /*@{*/
 #define gu_fatal(...)                                                          \
-    gu_log(GU_LOG_FATAL, __FILE__, __func__, __LINE__, __VA_ARGS__);
+    gu_log(WSREP_LOG_FATAL, __FILE__, __func__, __LINE__, __VA_ARGS__);
 #define gu_error(...)                                                          \
-    gu_log(GU_LOG_ERROR, __FILE__, __func__, __LINE__, __VA_ARGS__);
+    gu_log(WSREP_LOG_ERROR, __FILE__, __func__, __LINE__, __VA_ARGS__);
 #define gu_warn(...)                                                           \
-    gu_log(GU_LOG_WARN, __FILE__, __func__, __LINE__, __VA_ARGS__);
+    gu_log(WSREP_LOG_WARN, __FILE__, __func__, __LINE__, __VA_ARGS__);
 #define gu_info(...)                                                           \
-    gu_log(GU_LOG_INFO, __FILE__, __func__, __LINE__, __VA_ARGS__)
+    gu_log(WSREP_LOG_INFO, __FILE__, __func__, __LINE__, __VA_ARGS__)
 #define gu_debug(...)                                                          \
     if (gu_unlikely(gu_log_debug))                                             \
     {                                                                          \
-        gu_log(GU_LOG_DEBUG, __FILE__, __func__, __LINE__, __VA_ARGS__);       \
+        gu_log(WSREP_LOG_DEBUG, __FILE__, __func__, __LINE__, __VA_ARGS__);       \
     }
 /*@}*/
 
@@ -100,7 +92,7 @@ extern "C"
 {
 extern bool        gu_log_self_tstamp;
 extern gu_log_cb_t gu_log_cb;
-extern void        gu_log_cb_default (int, const char*);
+extern void        gu_log_cb_default (wsrep_log_level_t, const char*);
 extern const char* gu_log_level_str[];
 }
 #endif /* _gu_log_extra_ */

@@ -19,7 +19,7 @@
 /* Global configurable variables */
 static FILE*      gu_log_file        = NULL;
 bool              gu_log_self_tstamp = false;
-gu_log_severity_t gu_log_max_level   = GU_LOG_INFO;
+wsrep_log_level_t gu_log_max_level = WSREP_LOG_INFO;
 
 int
 gu_conf_set_log_file (FILE *file)
@@ -54,7 +54,7 @@ gu_conf_self_tstamp_off ()
 int
 gu_conf_debug_on ()
 {
-    gu_log_max_level = GU_LOG_DEBUG;
+    gu_log_max_level = WSREP_LOG_DEBUG;
     gu_debug ("Turning debug logging on");
     return 0;
 }
@@ -63,7 +63,7 @@ int
 gu_conf_debug_off ()
 {
     gu_debug ("Turning debug logging off");
-    gu_log_max_level = GU_LOG_INFO;
+    gu_log_max_level = WSREP_LOG_INFO;
     return 0;
 }
 
@@ -86,7 +86,7 @@ log_tstamp (char* tstamp, size_t const len)
     return ret;
 }
 
-const char* gu_log_level_str[GU_LOG_DEBUG + 2] = 
+const char* gu_log_level_str[WSREP_LOG_DEBUG + 2] =
 {
     "FATAL: ",
     "ERROR: ",
@@ -101,7 +101,7 @@ const char* gu_log_level_str[GU_LOG_DEBUG + 2] =
  * Default logging function: simply writes to stderr or gu_log_file if set.
  */
 void
-gu_log_cb_default (int severity, const char* msg)
+gu_log_cb_default (wsrep_log_level_t severity, const char* msg)
 {
     FILE* log_file = gu_log_file ? gu_log_file : stderr;
     fputs  (msg,  log_file);
@@ -129,7 +129,7 @@ gu_conf_set_log_callback (gu_log_cb_t callback)
 }
 
 int
-gu_log (gu_log_severity_t severity,
+gu_log (wsrep_log_level_t severity,
         const char*       file,
         const char*       function,
         const int         line,
@@ -154,7 +154,7 @@ gu_log (gu_log_severity_t severity,
             gu_log_cb_default == gu_log_cb ? gu_log_level_str[severity] : "";
 
         /* provide file:func():line info only if debug logging is on */
-        if (gu_likely(!gu_log_debug && severity > GU_LOG_ERROR)) {
+        if (gu_likely(!gu_log_debug && severity > WSREP_LOG_ERROR)) {
             len = snprintf (str, max_string, "%s", log_level_str);
         }
         else {

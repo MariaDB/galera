@@ -2317,7 +2317,7 @@ START_TEST(test_gap_rate_limit)
     // Start time from 1 sec to avoid hitting gap rate limit for the first
     // gap message.
     gu::datetime::SimClock::init(gu::datetime::Sec);
-    gu_log_max_level = GU_LOG_DEBUG;
+    gu_log_max_level = WSREP_LOG_DEBUG;
     TwoNodeFixture f;
     gcomm::Protolay::sync_param_cb_t spcb;
 
@@ -2409,7 +2409,7 @@ START_TEST(test_gap_rate_limit_delayed)
     // Start time from 1 sec to avoid hitting gap rate limit for the first
     // gap message.
     gu::datetime::SimClock::init(gu::datetime::Sec);
-    gu_log_max_level = GU_LOG_DEBUG;
+    gu_log_max_level = WSREP_LOG_DEBUG;
     TwoNodeFixture f;
     gcomm::Protolay::sync_param_cb_t spcb;
 

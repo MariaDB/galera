@@ -75,58 +75,8 @@ namespace gu
         return debug_filter.size() > 0 && debug_filter.is_set(func) == false;
     }
 
-#ifndef _gu_log_h_
-    void
-    Logger::enable_tstamp (bool yes)
-    {
-        do_timestamp = yes;
-    }
-
-    void
-    Logger::enable_debug (bool yes)
-    {
-        if (yes) {
-            max_level = LOG_DEBUG;
-        }
-        else {
-            max_level = LOG_INFO;
-        }
-    }
-
-    void
-    Logger::default_logger (int lvl, const char* msg)
-    {
-        fputs  (msg, stderr); fputc ('\n', stderr);
-        fflush (stderr);
-    }
-
-    void
-    Logger::set_logger (LogCallback cb)
-    {
-        if (0 == cb) {
-            logger = default_logger;
-        }
-        else {
-            logger = cb;
-        }
-    }
-
-    static const char* level_str[LOG_MAX] = 
-    {
-        "FATAL: ",
-        "ERROR: ",
-        " WARN: ",
-        " INFO: ",
-        "DEBUG: "
-    };
-
-    bool        Logger::do_timestamp = false;
-    LogLevel    Logger::max_level    = LOG_INFO;
-    LogCallback Logger::logger       = default_logger;
-#else
 #define do_timestamp       gu_log_self_tstamp == true
 #define level_str          gu_log_level_str
-#endif // _gu_log_h_
 
     void
     Logger::prepare_default()

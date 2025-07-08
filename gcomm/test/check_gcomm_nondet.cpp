@@ -65,7 +65,7 @@ int main(int argc, char* argv[])
 
     if (::getenv("CHECK_GCOMM_DEBUG"))
     {
-        gu_log_max_level = GU_LOG_DEBUG;
+        gu_log_max_level = WSREP_LOG_DEBUG;
         //gu::Logger::enable_debug(true);
     }
 
