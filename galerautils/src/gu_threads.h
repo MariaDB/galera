@@ -11,7 +11,7 @@
 
 #include "gu_types.h" // bool
 
-#if __unix__
+#if defined(__unix__) || defined(__APPLE__)
 
 #include <pthread.h>
 #include <assert.h>
@@ -318,7 +318,7 @@ typedef pthread_barrier_t      gu_barrier_t_SYS;
 
 #endif /* native POSIX barriers */
 
-#endif /* __unix__ */
+#endif /* defined(__unix__) || defined(__APPLE__) */
 
 /**
  *  Depending on compile-time flags application will either use
