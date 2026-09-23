@@ -1085,7 +1085,9 @@ static DummyNode* create_dummy_node(size_t idx,
                                     const string& suspect_timeout = "PT1H",
                                     const string& inactive_timeout = "PT1H",
                                     const string& retrans_period = "PT20M",
-                                    int weight = 1)
+                                    int weight = 1,
+                                    // Empty means inactive_timeout.
+                                    const string& install_timeout = "")
 {
     gu::Config& gu_conf(static_gu_conf());
     gu::ssl_register_params(gu_conf);
@@ -1096,7 +1098,8 @@ static DummyNode* create_dummy_node(size_t idx,
         + Conf::EvsInactiveTimeout + "=" + inactive_timeout + "&"
         + Conf::EvsKeepalivePeriod + "=" + retrans_period + "&"
         + Conf::EvsJoinRetransPeriod + "=" + retrans_period + "&"
-        + Conf::EvsInstallTimeout + "=" + inactive_timeout + "&"
+        + Conf::EvsInstallTimeout + "="
+        + (install_timeout.empty() ? inactive_timeout : install_timeout) + "&"
         + Conf::PcWeight + "=" + gu::to_string(weight) + "&"
         + Conf::EvsVersion + "=" + gu::to_string<int>(version) + "&"
         + Conf::EvsInfoLogMask + "=" + "0x3";
@@ -3715,6 +3718,142 @@ START_TEST(test_quorum_2_to_2_in_3_node_cluster)
 }
 END_TEST
 
+
+namespace
+{
+    // Advance simulated time by the given period, propagating messages
+    // and handling timers on the given nodes. Each tick drains every
+    // channel ten times, as propagate_until_cvi() does: draining once
+    // per tick lets the channel queues grow and starves retransmissions.
+    void propagate_for(PropagationMatrix& prop,
+                       const vector<DummyNode*>& nodes,
+                       const Period& duration)
+    {
+        const long long step(50*gu::datetime::MSec);
+        for (long long elapsed(0); elapsed < duration.get_nsecs();
+             elapsed += step)
+        {
+            gu_trace(prop.propagate_n(10));
+            for (size_t i(0); i < nodes.size(); ++i)
+            {
+                gu_trace(nodes[i]->handle_timers());
+            }
+            SimClock::inc_time(step);
+        }
+    }
+
+    // True if the node has been delivered a non primary view.
+    bool saw_non_prim(const DummyNode* dn)
+    {
+        const Trace::ViewTraceMap& vtm(dn->trace().view_traces());
+        for (Trace::ViewTraceMap::const_iterator i(vtm.begin());
+             i != vtm.end(); ++i)
+        {
+            if (Trace::ViewTraceMap::value(i).view().type() == V_NON_PRIM)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+// MDEV-38920: the EVS view install protocol must not be run to
+// exhaustion by a single link failure.
+//
+// The install timeout is configured below the suspect timeout. That
+// disables asymmetry elimination, because the early return in
+// Proto::asymmetry_elimination() compares install_timeout minus
+// suspect_timeout against the time left on the install timer, and that
+// difference is negative. The nodes then never agree on the operational
+// set and the install timer expires.
+//
+// The verdict is that no node may log "install timer expired". The
+// failure is injected as one directional message loss for a bounded
+// period, then the link is restored. Simulated time makes the sequence
+// deterministic.
+START_TEST(test_mdev_38920_install_timer_expired)
+{
+    log_info << "START (test_mdev_38920_install_timer_expired)";
+    // Five nodes, so that a majority remains once both ends of the broken
+    // link are evicted. With four nodes that leaves two of four, which is
+    // correctly non-primary, and the second verdict below could not be
+    // made.
+    const size_t n_nodes(5);
+    const string suspect_timeout("PT16S");
+    const string inactive_timeout("PT32S");
+    const string install_timeout("PT12S"); // Below suspect timeout.
+    const string retrans_period("PT1S");
+
+    vector<DummyNode*> dn;
+    PropagationMatrix prop;
+    uint32_t view_seq(0);
+
+    for (size_t i(0); i < n_nodes; ++i)
+    {
+        dn.push_back(create_dummy_node(i + 1, 0, suspect_timeout,
+                                       inactive_timeout, retrans_period,
+                                       1, install_timeout));
+        gu_trace(join_node(&prop, dn[i], i == 0));
+        set_cvi(dn, 0, i, ++view_seq, V_PRIM);
+        gu_trace(prop.propagate_until_cvi(false));
+    }
+
+    LogCapture lc;
+    lc.start();
+
+    // Node 5 messages no longer reach node 1. The reverse direction and
+    // all other links stay up, so nodes 2, 3 and 4 keep seeing node 5
+    // while node 1 does not.
+    log_info << "drop messages from node 5 to node 1";
+    prop.set_loss(5, 1, 0.);
+
+    // Past suspect timeout plus install timeout, and past inactive
+    // timeout, so that a correct implementation has time to settle on a
+    // primary view.
+    gu_trace(propagate_for(prop, dn, Period("PT60S")));
+
+    log_info << "restore messages from node 5 to node 1";
+    prop.set_loss(5, 1, 1.);
+    gu_trace(propagate_for(prop, dn, Period("PT120S")));
+
+    // Stop before asserting: a failing assertion must not leave the log
+    // callback installed.
+    lc.stop();
+
+    const size_t expired(lc.count("install timer expired"));
+    ck_assert_msg(expired == 0,
+                  "the view install protocol timed out %zu times",
+                  expired);
+
+    // The checks below record the expected outcome. Neither of them
+    // discriminates the fix on its own: a provider which does not sanitize
+    // the install timeout logs the expiries counted above, but still
+    // recovers from a fault of this length.
+    //
+    // Asymmetry elimination evicts both ends of the dropped link, so nodes
+    // 1 and 5 lose the primary component and the other three keep it. Three
+    // is the smallest majority of five, so the bound below is exact.
+    size_t n_stayed_prim(0);
+    for (size_t i(0); i < n_nodes; ++i)
+    {
+        if (saw_non_prim(dn[i]) == false) ++n_stayed_prim;
+    }
+    ck_assert_msg(n_stayed_prim > n_nodes/2,
+                  "only %zu of %zu nodes stayed in the primary component",
+                  n_stayed_prim, n_nodes);
+
+    for (size_t i(0); i < n_nodes; ++i)
+    {
+        ck_assert(pc_from_dummy(dn[i])->state() == Proto::S_PRIM);
+        ck_assert(dn[i]->trace().current_view_trace().view().members().size()
+                  == n_nodes);
+    }
+
+    for_each(dn.begin(), dn.end(), DeleteObject());
+}
+END_TEST
+
 Suite* pc_suite()
 {
     Suite* s = suite_create("gcomm::pc");
@@ -3847,6 +3986,11 @@ Suite* pc_suite()
 
     tc = tcase_create("test_quorum_2_to_2_in_3_node_cluster");
     tcase_add_test(tc, test_quorum_2_to_2_in_3_node_cluster);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_mdev_38920_install_timer_expired");
+    tcase_add_test(tc, test_mdev_38920_install_timer_expired);
+    tcase_set_timeout(tc, 30);
     suite_add_tcase(s, tc);
 
     return s;
