@@ -11,6 +11,7 @@
 #include "check_trace.hpp"
 #include "gcomm/conf.hpp"
 #include "gu_asio.hpp" // gu::ssl_register_params()
+#include "gu_conf.h" // gu_conf_set_log_callback()
 #include <iostream> // std::cerr
 
 using namespace std;
@@ -29,6 +30,47 @@ struct CheckTraceConfInit
 extern "C" void check_trace_log_cb(int severity, const char* msg)
 {
     std::cerr << gu::datetime::Date::monotonic() << ": " << msg << "\n";
+}
+
+
+// The started LogCapture, see LogCapture::start().
+static gcomm::LogCapture* log_capture(0);
+
+extern "C" void log_capture_cb(int severity, const char* msg)
+{
+    if (log_capture != 0) log_capture->add(msg);
+}
+
+void gcomm::LogCapture::start()
+{
+    gcomm_assert(log_capture == 0) << "log capture already started";
+    lines_.clear();
+    // A test which asserts that a message was not logged must not depend
+    // on the log level which happens to be in effect.
+    saved_log_level_ = gu_log_max_level;
+    if (gu_log_max_level < GU_LOG_INFO) gu_log_max_level = GU_LOG_INFO;
+    log_capture = this;
+    gu_conf_set_log_callback(log_capture_cb);
+}
+
+void gcomm::LogCapture::stop()
+{
+    if (log_capture == this)
+    {
+        gu_conf_set_log_callback(0);
+        gu_log_max_level = static_cast<gu_log_severity_t>(saved_log_level_);
+        log_capture = 0;
+    }
+}
+
+size_t gcomm::LogCapture::count(const std::string& substr) const
+{
+    size_t ret(0);
+    for (size_t i(0); i < lines_.size(); ++i)
+    {
+        if (lines_[i].find(substr) != std::string::npos) ++ret;
+    }
+    return ret;
 }
 
 

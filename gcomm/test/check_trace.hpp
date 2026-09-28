@@ -11,6 +11,9 @@
 #include "gu_uri.hpp"
 #include "gu_datetime.hpp"
 
+#include <string>
+#include <vector>
+
 #include "gcomm/datagram.hpp"
 #include "gcomm/uuid.hpp"
 #include "gcomm/protolay.hpp"
@@ -584,5 +587,35 @@ namespace gcomm
 
     // Cross check traces from vector of dummy nodes
     void check_trace(const std::vector<DummyNode*>& nvec);
+
+    // Collects log messages while started, so that a test can assert on
+    // what the code under test logged. Only one instance may be started
+    // at a time.
+    class LogCapture
+    {
+    public:
+        LogCapture() : lines_(), saved_log_level_(0) { }
+        ~LogCapture() { stop(); }
+
+        // Raises the log level to info if it is below, so that a message
+        // logged at info level is collected too.
+        void start();
+        // Restores the default log callback and the log level. Idempotent,
+        // and called by the destructor, so a test may stop before
+        // asserting.
+        void stop();
+
+        // Number of collected messages containing the substring.
+        size_t count(const std::string& substr) const;
+
+        void add(const char* msg) { lines_.push_back(msg); }
+
+    private:
+        LogCapture(const LogCapture&);
+        LogCapture& operator=(const LogCapture&);
+
+        std::vector<std::string> lines_;
+        int saved_log_level_;
+    };
 
 } // namespace gcomm
