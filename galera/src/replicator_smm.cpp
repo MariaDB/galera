@@ -236,6 +236,10 @@ void galera::ReplicatorSMM::start_closing()
     if (!closing_)
     {
         closing_ = true;
+        // Release an IST receiver that may still be waiting for ready()
+        // (state transfer negotiation never reached that point) so it
+        // cannot block this node's shutdown indefinitely.
+        ist_receiver_.cancel_wait();
         gcs_.close();
     }
 }
