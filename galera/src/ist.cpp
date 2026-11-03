@@ -123,7 +123,8 @@ galera::ist::Receiver::Receiver(gu::Config&           conf,
     version_      (-1),
     use_ssl_      (false),
     running_      (false),
-    ready_        (false)
+    ready_        (false),
+    interrupted_  (false)
 {
     /* check if receive address is explicitly set in config */
     try {
@@ -258,6 +259,7 @@ galera::ist::Receiver::prepare(wsrep_seqno_t const first_seqno,
                                const wsrep_uuid_t& source_id)
 {
     ready_ = false;
+    interrupted_ = false;
     version_ = version;
     source_id_ = source_id;
 
@@ -352,7 +354,16 @@ void galera::ist::Receiver::run()
         // wait for SST to complete so that we know what is the first_seqno_
         {
             gu::Lock lock(mutex_);
-            while (ready_ == false) { lock.wait(cond_); }
+            while (ready_ == false && interrupted_ == false) { lock.wait(cond_); }
+            if (ready_ == false)
+            {
+                // finished() was called (e.g. server shutdown) before SST
+                // completed: there will be no first_seqno_ to apply from.
+                log_info << "IST receiver interrupted while waiting for "
+                            "SST to complete";
+                ec = EINTR;
+                goto err;
+            }
         }
         log_info << "####### IST applying starts with " << first_seqno_; //remove
         assert(first_seqno_ > 0);
@@ -518,6 +529,14 @@ void galera::ist::Receiver::ready(wsrep_seqno_t const first)
 }
 
 
+void galera::ist::Receiver::interrupt_wait()
+{
+    gu::Lock lock(mutex_);
+    interrupted_ = true;
+    cond_.signal();
+}
+
+
 wsrep_seqno_t galera::ist::Receiver::finished()
 {
     if (recv_addr_ == "")
@@ -526,7 +545,12 @@ wsrep_seqno_t galera::ist::Receiver::finished()
     }
     else
     {
-        interrupt();
+        // Wake up a receiver thread that is still waiting for SST to
+        // complete (ready() was never called): the socket-based
+        // interrupt_stream() below only reaches a receiver that has already
+        // started reading the IST stream.
+        interrupt_wait();
+        interrupt_stream();
 
         int err;
         if ((err = gu_thread_join(thread_, 0)) != 0)
@@ -547,7 +571,7 @@ wsrep_seqno_t galera::ist::Receiver::finished()
 }
 
 
-void galera::ist::Receiver::interrupt()
+void galera::ist::Receiver::interrupt_stream()
 {
     gu::URI uri(recv_addr_);
     try
