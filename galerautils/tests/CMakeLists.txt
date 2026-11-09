@@ -66,6 +66,7 @@ add_executable(gu_tests++
   gu_histogram_test.cpp
   gu_stats_test.cpp
   gu_thread_test.cpp
+  gu_debug_sync_test.cpp
   gu_asio_test.cpp
   gu_deqmap_test.cpp
   gu_progress_test.cpp
