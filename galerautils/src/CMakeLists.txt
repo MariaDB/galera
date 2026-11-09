@@ -107,3 +107,8 @@ target_compile_options(galerautilsxx
   -Wno-unused-parameter)
 
 target_link_libraries(galerautilsxx galerautils ${GALERA_SSL_LIBS})
+
+target_compile_definitions(galerautilsxx
+  PUBLIC
+  $<$<BOOL:${GALERA_GU_DBUG_ON}>:GU_DBUG_ON>
+  )
