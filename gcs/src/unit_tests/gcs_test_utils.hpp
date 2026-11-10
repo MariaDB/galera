@@ -57,6 +57,26 @@ namespace gcs_test
         gcs_group*         group_;
         bool               initialized_;
     };
+    /* Places a message right before a PROT_NONE page, so that any read
+     * past the end of the message faults. */
+    class GuardedBuf
+    {
+    public:
+        GuardedBuf();
+        ~GuardedBuf();
+
+        /* @return copy of len bytes of src at an align boundary, ending
+         *         at most align - 1 non-NUL bytes before the guard page */
+        void* place(const void* src, size_t len, size_t align = 1);
+
+    private:
+        GuardedBuf(const GuardedBuf&);
+        GuardedBuf& operator=(const GuardedBuf&);
+
+        size_t   const page_;
+        uint8_t* const mem_;
+    };
+
 } /* namespace gcs_test */
 
 struct gt_node

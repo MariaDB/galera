@@ -740,7 +740,12 @@ gcs_group_handle_comp_msg (gcs_group_t* group, const gcs_comp_msg_t* comp)
 gcs_group_state_t
 gcs_group_handle_uuid_msg  (gcs_group_t* group, const gcs_recv_msg_t* msg)
 {
-    assert (msg->size == sizeof(gu_uuid_t));
+    if (gu_unlikely(msg->size != sizeof(gu_uuid_t))) {
+        gu_warn ("Bogus size for state UUID msg from node %d (%s): %d. "
+                 "Dropping message.", msg->sender_idx,
+                 group->nodes[msg->sender_idx].name, msg->size);
+        return group->state;
+    }
 
     if (GCS_GROUP_WAIT_STATE_UUID == group->state &&
         0 == msg->sender_idx /* check that it is from the representative */) {
@@ -1074,16 +1079,28 @@ gcs_group_handle_vote_msg (gcs_group_t* group, const gcs_recv_msg_t* msg)
 
     if (gtid.uuid() == group->group_uuid && gtid.seqno() > min_seqno)
     {
-        const char* const data
-            (gcs::core::CodeMsg::serial_size() < msg->size ?
-             (static_cast<char*>(msg->buf) + gcs::core::CodeMsg::serial_size()) :
-             NULL);
+        std::string msg_str("Success");
+        if (code)
+        {
+            /* optional vote message, not necessarily NUL-terminated */
+            int const cm_size(gcs::core::CodeMsg::serial_size());
+            if (msg->size > cm_size)
+            {
+                const char* const data(static_cast<const char*>(msg->buf) +
+                                       cm_size);
+                msg_str.assign(data, strnlen(data, msg->size - cm_size));
+            }
+            else
+            {
+                msg_str = "(null)";
+            }
+        }
 
         /* voting on this seqno has not completed yet */
         log_info << "Member " << msg->sender_idx << '(' << sender.name << ") "
                  << (code ? "initiates" : "responds to") << " vote on "
                  << gtid << ',' << gu::PrintBase<>(code) << ": "
-                 << (code ? (data ? data : "(null)") : "Success");
+                 << msg_str;
 
         gcs_node_set_vote (&sender, gtid.seqno(), code,
                            group->quorum.gcs_proto_ver);
