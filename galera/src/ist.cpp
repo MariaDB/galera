@@ -319,17 +319,21 @@ galera::ist::Receiver::prepare(wsrep_seqno_t const first_seqno,
 
 void galera::ist::Receiver::run()
 {
-    auto socket(acceptor_->accept());
-    acceptor_->close();
-
     /* shall be initialized below, when we know at what seqno preload starts */
     gu::Progress<wsrep_seqno_t>* progress(NULL);
 
     int ec(0);
     std::ostringstream error_os;
+    std::shared_ptr<gu::AsioSocket> socket;
 
     try
     {
+        // Inside the try: AsioAcceptorReact::accept() can throw gu::Exception
+        // on an allowlist rejection, and run_receiver_thread() has no catch
+        // of its own, so it must be caught below, not escape run().
+        socket = acceptor_->accept();
+        acceptor_->close();
+
         bool const keep_keys(conf_.get(CONF_KEEP_KEYS, CONF_KEEP_KEYS_DEFAULT));
         Proto p(gcache_, version_, keep_keys);
 
@@ -477,9 +481,12 @@ void galera::ist::Receiver::run()
     }
 
 err:
+    // Idempotent; covers accept() throwing, else finished()/interrupt()
+    // reconnects to a still-listening acceptor and blocks forever.
+    acceptor_->close();
     delete progress;
     gu::Lock lock(mutex_);
-    socket->close();
+    if (socket) socket->close();
 
     running_ = false;
     if (last_seqno_ > 0 && ec != EINTR && current_seqno_ < last_seqno_ &&
