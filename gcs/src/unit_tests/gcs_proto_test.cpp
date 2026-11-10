@@ -5,6 +5,7 @@
  */
 
 #include "../gcs_act_proto.hpp"
+#include "gcs_test_utils.hpp"
 
 #include "gcs_proto_test.hpp" // must be included last
 
@@ -101,6 +102,24 @@ START_TEST (gcs_proto_test)
 }
 END_TEST
 
+/* A message shorter than the header must be rejected without reading it. */
+START_TEST (gcs_proto_test_short)
+{
+    std::vector<char> const hdr(gcs_act_proto_hdr_size(GCS_PROTO_MAX));
+    gcs_test::GuardedBuf guard;
+
+    for (size_t len(0); len < hdr.size(); ++len)
+    {
+        gcs_act_frag_t frg;
+        ck_assert_msg(-EBADMSG ==
+                      gcs_act_proto_read(&frg, guard.place(hdr.data(), len),
+                                         len),
+                      "accepted %zu bytes", len);
+        ck_assert(-1 == frg.proto_ver);
+    }
+}
+END_TEST
+
 Suite *gcs_proto_suite(void)
 {
   Suite *suite = suite_create("GCS core protocol");
@@ -108,6 +127,7 @@ Suite *gcs_proto_suite(void)
 
   suite_add_tcase (suite, tcase);
   tcase_add_test  (tcase, gcs_proto_test);
+  tcase_add_test  (tcase, gcs_proto_test_short);
   return suite;
 }
 

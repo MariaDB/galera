@@ -11,6 +11,10 @@
 
 #include "gu_inttypes.hpp"
 
+#include <check.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
 namespace gcs_test
 {
 
@@ -139,6 +143,30 @@ GcsGroup::init(const std::string& node_name,
 GcsGroup::~GcsGroup()
 {
     common_dtor();
+}
+
+GuardedBuf::GuardedBuf()
+    : page_(sysconf(_SC_PAGESIZE)),
+      mem_(static_cast<uint8_t*>(mmap(NULL, 2 * page_, PROT_READ | PROT_WRITE,
+                                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)))
+{
+    ck_assert(MAP_FAILED != mem_);
+    ck_assert(0 == mprotect(mem_ + page_, page_, PROT_NONE));
+}
+
+GuardedBuf::~GuardedBuf()
+{
+    munmap(mem_, 2 * page_);
+}
+
+void*
+GuardedBuf::place(const void* const src, size_t const len, size_t const align)
+{
+    ck_assert(len <= page_);
+    uint8_t* const dst(mem_ + (page_ - len) / align * align);
+    memcpy(dst, src, len);
+    memset(dst + len, 0xff, mem_ + page_ - (dst + len));
+    return dst;
 }
 
 } // namespace

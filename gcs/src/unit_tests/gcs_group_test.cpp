@@ -7,12 +7,14 @@
 #include "../gcs_group.hpp"
 #include "../gcs_act_proto.hpp"
 #include "../gcs_comp_msg.hpp"
+#include "../gcs_code_msg.hpp"
 
 #include <check.h>
 #include "gcs_group_test.hpp"
 #include "gcs_test_utils.hpp"
 
 #include "gu_inttypes.hpp"
+#include "gu_conf.h"
 
 #define TRUE (0 == 0)
 #define FALSE (!TRUE)
@@ -903,6 +905,106 @@ START_TEST(test_gcs_group_find_donor_stateless)
 }
 END_TEST
 
+/* A state UUID message of a wrong size must be dropped. */
+START_TEST(test_gcs_group_uuid_msg_bad_size)
+{
+    gt_group gt(2, GCS_PROTO_MAX, true);
+    gcs_group_t* const group(gt.nodes[0]->group());
+    gt.deliver_component_msg(true);
+    ck_assert(GCS_GROUP_WAIT_STATE_UUID == gt.nodes[0]->group.state());
+
+    gu_uuid_t uuid;
+    gu_uuid_generate(&uuid, NULL, 0);
+
+    gcs_test::GuardedBuf guard;
+    for (size_t len(0); len < sizeof(uuid); ++len)
+    {
+        gcs_recv_msg_t const msg(guard.place(&uuid, len), len, len, 0,
+                                 GCS_MSG_STATE_UUID);
+        ck_assert_msg(GCS_GROUP_WAIT_STATE_UUID ==
+                      gcs_group_handle_uuid_msg(group, &msg),
+                      "accepted %zu bytes", len);
+    }
+
+    gcs_recv_msg_t const msg(guard.place(&uuid, sizeof(uuid)), sizeof(uuid),
+                             sizeof(uuid), 0, GCS_MSG_STATE_UUID);
+    ck_assert(GCS_GROUP_WAIT_STATE_MSG ==
+              gcs_group_handle_uuid_msg(group, &msg));
+    ck_assert(!gu_uuid_compare(&uuid, &group->state_uuid));
+}
+END_TEST
+
+static std::string vote_log;
+
+extern "C" void vote_log_cb(int, const char* const msg)
+{
+    vote_log += msg;
+    vote_log += '\n';
+}
+
+static VoteResult
+deliver_vote(gcs_group_t* const group, const std::vector<char>& buf)
+{
+    gcs_test::GuardedBuf guard;
+    gcs_recv_msg_t const msg(guard.place(buf.data(), buf.size(), 8),
+                             buf.size(), buf.size(), 1, GCS_MSG_VOTE);
+    vote_log.clear();
+    gu_conf_set_log_callback(vote_log_cb);
+    VoteResult const ret(gcs_group_handle_vote_msg(group, &msg));
+    gu_conf_set_log_callback(NULL);
+    return ret;
+}
+
+/* Vote message text is optional and not necessarily NUL-terminated. */
+START_TEST(test_gcs_group_vote_msg_text)
+{
+    size_t const cm_size(gcs::core::CodeMsg::serial_size());
+    struct { std::string text; std::string logged; } const cases[] =
+    {
+        { std::string(16, 'a'), std::string(16, 'a') },
+        { "",                   "(null)"             }
+    };
+
+    for (const auto& c : cases)
+    {
+        gt_group gt(2, GCS_PROTO_MAX, true);
+        gcs_group_t* const group(gt.nodes[0]->group());
+
+        gcs::core::CodeMsg const cm(gu::GTID(group->group_uuid, 1000), -EIO);
+        std::vector<char> buf(static_cast<const char*>(cm()),
+                              static_cast<const char*>(cm()) + cm_size);
+        buf.insert(buf.end(), c.text.begin(), c.text.end());
+
+        deliver_vote(group, buf);
+        ck_assert(1000 == group->nodes[1].vote_seqno);
+        ck_assert(-EIO == group->nodes[1].vote_res);
+        ck_assert_msg(vote_log.find("initiates vote on ") != std::string::npos
+                      && vote_log.find(": " + c.logged + '\n') !=
+                      std::string::npos, "log: %s", vote_log.c_str());
+    }
+}
+END_TEST
+
+/* Before gcs protocol 1 a vote message is a bare seqno. */
+START_TEST(test_gcs_group_vote_msg_v0)
+{
+    gt_group gt(2, 0, true);
+    gcs_group_t* const group(gt.nodes[0]->group());
+    size_t const cm_size(gcs::core::CodeMsg::serial_size());
+
+    gcs::core::CodeMsg const cm(gu::GTID(group->group_uuid, 1000), -EIO);
+    std::vector<char> buf(cm_size + 16, 'a');
+    memcpy(buf.data(), cm(), cm_size);
+
+    VoteResult const res(deliver_vote(group, buf));
+    ck_assert(GCS_NO_VOTE_SEQNO == res.seqno);
+    ck_assert(0 == res.res);
+    ck_assert(1000 != group->nodes[1].vote_seqno);
+    ck_assert_msg(vote_log.find("Bogus size") != std::string::npos,
+                  "log: %s", vote_log.c_str());
+}
+END_TEST
+
 Suite *gcs_group_suite(void)
 {
     Suite *suite = suite_create("GCS group context");
@@ -921,6 +1023,9 @@ Suite *gcs_group_suite(void)
     tcase_add_test  (tcase, test_stateless_flag_true);
     tcase_add_test  (tcase, test_gcs_group_find_donor_stateful);
     tcase_add_test  (tcase, test_gcs_group_find_donor_stateless);
+    tcase_add_test  (tcase, test_gcs_group_uuid_msg_bad_size);
+    tcase_add_test  (tcase, test_gcs_group_vote_msg_text);
+    tcase_add_test  (tcase, test_gcs_group_vote_msg_v0);
 
     return suite;
 }

@@ -82,13 +82,14 @@ gcs_act_proto_write (gcs_act_frag_t* frag, void* buf, size_t buf_len)
 long
 gcs_act_proto_read (gcs_act_frag_t* frag, const void* buf, size_t buf_len)
 {
-    frag->proto_ver = ((uint8_t*)buf)[PROTO_PV_OFFSET];
-
     if (gu_unlikely(buf_len < PROTO_DATA_OFFSET)) {
+        frag->proto_ver = -1;
         gu_error ("Action message too short: %zu, expected at least %zu",
                   buf_len, PROTO_DATA_OFFSET);
         return -EBADMSG;
     }
+
+    frag->proto_ver = ((uint8_t*)buf)[PROTO_PV_OFFSET];
 
     if (gu_unlikely(frag->proto_ver > GCS_PROTO_MAX)) {
         gu_error ("Bad protocol version %d, maximum supported %d",
