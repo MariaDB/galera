@@ -7,7 +7,6 @@ replication (wsrep) interface (https://github.com/codership/wsrep-API).
 The software and other files in this directory unless otherwise noted
 are distributed under GPLv2, see COPYING for details.
 
-
 BUILDING - General Instructions
 
 Build Requirements:
