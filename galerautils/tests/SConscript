@@ -70,6 +70,7 @@ gu_testspp = env.Program(target = 'gu_tests++',
                               gu_histogram_test.cpp
                               gu_stats_test.cpp
                               gu_thread_test.cpp
+                              gu_debug_sync_test.cpp
                               gu_shared_ptr_test.cpp
                               gu_asio_test.cpp
                               gu_deqmap_test.cpp

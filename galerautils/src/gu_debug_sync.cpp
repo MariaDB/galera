@@ -11,7 +11,13 @@
 
 namespace {
     gu::Mutex sync_mutex(0);
-    typedef std::multimap<std::string, gu::Cond*> SyncMap;
+    struct Waiter
+    {
+        gu::Cond cond;
+        bool     signalled;
+        Waiter() : cond(0), signalled(false) { }
+    };
+    typedef std::multimap<std::string, Waiter*> SyncMap;
     SyncMap sync_waiters;
 }
 
@@ -20,11 +26,17 @@ namespace {
 void gu_debug_sync_wait(const std::string& sync)
 {
     gu::Lock lock(sync_mutex);
-    gu::Cond cond(0);
+    Waiter waiter;
     log_debug << "enter sync wait '" << sync << "'";
     SyncMap::iterator i(
-        sync_waiters.insert(std::make_pair(sync, &cond)));
-    lock.wait(cond);
+        sync_waiters.insert(std::make_pair(sync, &waiter)));
+    // pthread_cond_wait() (and hence gu::Lock::wait()) may return without
+    // any matching signal (a spurious wakeup), so the real predicate must
+    // be re-checked in a loop rather than trusting a single wait() call.
+    while (!waiter.signalled)
+    {
+        lock.wait(waiter.cond);
+    }
     sync_waiters.erase(i);
     log_debug << "leave sync wait '" << sync << "'";
 }
@@ -38,7 +50,20 @@ void gu_debug_sync_signal(const std::string& sync)
     for (SyncMap::iterator i(range.first); i != range.second; ++i)
     {
         log_debug << "signalling waiter";
-        i->second->signal();
+        i->second->signalled = true;
+        i->second->cond.signal();
+    }
+}
+
+
+void gu_debug_sync_test_spurious_wakeup(const std::string& sync)
+{
+    gu::Lock lock(sync_mutex);
+    std::pair<SyncMap::iterator, SyncMap::iterator>
+        range(sync_waiters.equal_range(sync));
+    for (SyncMap::iterator i(range.first); i != range.second; ++i)
+    {
+        i->second->cond.signal();
     }
 }
 

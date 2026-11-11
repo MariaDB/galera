@@ -11,6 +11,9 @@
 #include "replicator_smm.hpp"
 #include "common.h"
 
+#include <gu_asio.hpp>
+#include <wsrep_allowlist_service.h>
+
 #include <GCache.hpp>
 #include <gu_arch.h>
 #include <check.h>
@@ -441,6 +444,108 @@ extern "C" void* receiver_thd(void* arg)
 }
 
 
+// MDEV-42000 regression coverage: a donor connects and the receiver
+// accepts, but the state transfer is abandoned (e.g. the joiner is
+// shutting down) before ready() is ever called. Before the fix,
+// finished()'s socket-based interrupt_stream() could not reach a receiver
+// still waiting for ready(), and both finished() and the receiver
+// thread blocked forever.
+struct interrupted_receiver_args
+{
+    std::string   listen_addr_;
+    wsrep_seqno_t first_;
+    wsrep_seqno_t last_;
+    TrxHandleSlave::Pool& trx_pool_;
+    gcache::GCache& gcache_;
+    int           version_;
+    wsrep_seqno_t finished_seqno_;
+    int           ist_end_error_;
+
+    interrupted_receiver_args(const std::string listen_addr,
+                              wsrep_seqno_t first, wsrep_seqno_t last,
+                              TrxHandleSlave::Pool& sp,
+                              gcache::GCache& gc, int version)
+        :
+        listen_addr_(listen_addr),
+        first_      (first),
+        last_       (last),
+        trx_pool_   (sp),
+        gcache_     (gc),
+        version_    (version),
+        finished_seqno_(WSREP_SEQNO_UNDEFINED),
+        ist_end_error_(0)
+    { }
+};
+
+extern "C" void* receiver_thd_interrupted(void* arg)
+{
+    mark_point();
+
+    interrupted_receiver_args* rargs(
+        reinterpret_cast<interrupted_receiver_args*>(arg));
+
+    gu::Config conf;
+    TrxHandleSlave::Pool slave_pool(sizeof(TrxHandleSlave), 1024,
+                                    "TrxHandleSlave");
+    galera::ReplicatorSMM::InitConfig(conf, NULL, NULL);
+
+    mark_point();
+
+    conf.set(galera::ist::Receiver::conf_recv_addr_key(),
+             rargs->listen_addr_);
+    ISTHandler isth;
+    galera::ist::Receiver receiver(conf, rargs->gcache_, slave_pool,
+                                   isth, 0, NULL);
+
+    // Prepare starts IST receiver thread
+    rargs->listen_addr_ = receiver.prepare(rargs->first_, rargs->last_,
+                                           rargs->version_,
+                                           WSREP_UUID_UNDEFINED);
+
+    gu_barrier_wait(&start_barrier);
+    mark_point();
+
+    // Give the donor time to connect and complete the handshake, so the
+    // receiver thread is parked waiting for ready(), which is
+    // deliberately never called.
+    usleep(200000);
+
+    // Before the MDEV-42000 fix this call never returned. The tcase
+    // timeout on this test is the regression guard if that happens again.
+    rargs->finished_seqno_ = receiver.finished();
+    rargs->ist_end_error_  = isth.wait();
+    return 0;
+}
+
+// The donor side of the same scenario: the receiver closes its end of
+// the connection once finished() interrupts it, so a send() in flight
+// at that moment fails. That is expected here, not a test bug.
+extern "C" void* sender_thd_interrupted(void* arg)
+{
+    mark_point();
+
+    const sender_args* sargs(reinterpret_cast<const sender_args*>(arg));
+
+    gu::Config conf;
+    galera::ReplicatorSMM::InitConfig(conf, NULL, NULL);
+    gu_barrier_wait(&start_barrier);
+    sargs->gcache_.seqno_lock(sargs->first_); // unlocked in sender dtor
+    try
+    {
+        galera::ist::Sender sender(conf, sargs->gcache_, sargs->peer_,
+                                   sargs->version_);
+        mark_point();
+        sender.send(sargs->first_, sargs->last_, sargs->first_);
+    }
+    catch (const gu::Exception& e)
+    {
+        log_info << "sender_thd_interrupted: " << e.what();
+    }
+    mark_point();
+    return 0;
+}
+
+
 static int select_trx_version(int protocol_version)
 {
     // see protocol version table in replicator_smm.hpp
@@ -733,6 +838,211 @@ START_TEST(test_ist_v10EE)
 }
 END_TEST
 
+static void test_ist_interrupted_before_ready(int const version)
+{
+    TrxHandleMaster::Pool lp(TrxHandleMaster::LOCAL_STORAGE_SIZE(), 4,
+                             "ist_interrupted");
+    TrxHandleSlave::Pool sp(sizeof(TrxHandleSlave), 4, "ist_interrupted");
+
+    int const trx_version(select_trx_version(version));
+    TrxHandleMaster::Params const trx_params("", trx_version,
+                                       galera::KeySet::MAX_VERSION);
+    std::string const dir(".");
+
+    gu::Config conf_sender;
+    galera::ReplicatorSMM::InitConfig(conf_sender, NULL, NULL);
+    std::string const gcache_sender_file("ist_interrupted_sender.cache");
+    conf_sender.set("gcache.name", gcache_sender_file);
+    conf_sender.set("gcache.size", "1M");
+    gcache::GCache* gcache_sender = new gcache::GCache(NULL, conf_sender, dir);
+
+    gu::Config conf_receiver;
+    galera::ReplicatorSMM::InitConfig(conf_receiver, NULL, NULL);
+    std::string const gcache_receiver_file("ist_interrupted_receiver.cache");
+    conf_receiver.set("gcache.name", gcache_receiver_file);
+    conf_receiver.set("gcache.size", "1M");
+    gcache::GCache* gcache_receiver = new gcache::GCache(NULL, conf_receiver,
+                                                         dir);
+
+    std::string receiver_addr("tcp://127.0.0.1:0");
+    wsrep_uuid_t uuid;
+    gu_uuid_generate(reinterpret_cast<gu_uuid_t*>(&uuid), 0, 0);
+
+    mark_point();
+
+    // populate gcache so the donor has something to offer, even though
+    // the receiver here will never read any of it
+    for (size_t i(1); i <= 10; ++i)
+    {
+        if (i % 3)
+        {
+            store_trx(gcache_sender, lp, trx_params, uuid, i);
+        }
+        else
+        {
+            store_cc(gcache_sender, uuid, i);
+        }
+    }
+
+    mark_point();
+
+    interrupted_receiver_args rargs(receiver_addr, 1, 10, sp,
+                                    *gcache_receiver, version);
+    sender_args sargs(*gcache_sender, rargs.listen_addr_, 1, 10, version);
+
+    gu_barrier_init(&start_barrier, 0, 2);
+
+    gu_thread_t sender_thread, receiver_thread;
+
+    gu_thread_create(NULL, &sender_thread, &sender_thd_interrupted, &sargs);
+    mark_point();
+    usleep(100000);
+    gu_thread_create(NULL, &receiver_thread, &receiver_thd_interrupted, &rargs);
+    mark_point();
+
+    // These joins are the regression guard: before the MDEV-42000 fix the
+    // receiver thread never returned from finished(), so this join (and
+    // the test) hung until the tcase timeout.
+    gu_thread_join(receiver_thread, 0);
+    gu_thread_join(sender_thread, 0);
+
+    mark_point();
+
+    ck_assert(rargs.finished_seqno_ == WSREP_SEQNO_UNDEFINED);
+    ck_assert(rargs.ist_end_error_ == EINTR);
+
+    delete gcache_sender;
+    delete gcache_receiver;
+
+    mark_point();
+    unlink(gcache_sender_file.c_str());
+    unlink(gcache_receiver_file.c_str());
+}
+
+START_TEST(test_ist_interrupted_before_ready_v7)
+{
+    test_ist_interrupted_before_ready(7);
+}
+END_TEST
+
+namespace
+{
+    wsrep_status_t reject_all_allowlist_cb(wsrep_allowlist_context_t*,
+                                           wsrep_allowlist_key_t,
+                                           const wsrep_buf_t*)
+    {
+        return WSREP_NOT_ALLOWED;
+    }
+}
+
+// MDEV-42140 regression coverage: the donor's incoming IST connection is
+// rejected by the allowlist check. Before the fix,
+// galera::ist::Receiver::run() called acceptor_->accept() outside its own
+// try block, so the gu::Exception thrown by the allowlist check escaped
+// run() entirely and reached std::terminate() through the raw receiver
+// thread entry point, aborting the whole process instead of being
+// reported through ist_end().
+static void test_ist_allowlist_rejected(int const version)
+{
+    TrxHandleMaster::Pool lp(TrxHandleMaster::LOCAL_STORAGE_SIZE(), 4,
+                             "ist_allowlist_rejected");
+    TrxHandleSlave::Pool sp(sizeof(TrxHandleSlave), 4,
+                            "ist_allowlist_rejected");
+
+    int const trx_version(select_trx_version(version));
+    TrxHandleMaster::Params const trx_params("", trx_version,
+                                       galera::KeySet::MAX_VERSION);
+    std::string const dir(".");
+
+    gu::Config conf_sender;
+    galera::ReplicatorSMM::InitConfig(conf_sender, NULL, NULL);
+    std::string const gcache_sender_file("ist_allowlist_rejected_sender.cache");
+    conf_sender.set("gcache.name", gcache_sender_file);
+    conf_sender.set("gcache.size", "1M");
+    gcache::GCache* gcache_sender = new gcache::GCache(NULL, conf_sender, dir);
+
+    gu::Config conf_receiver;
+    galera::ReplicatorSMM::InitConfig(conf_receiver, NULL, NULL);
+    std::string const gcache_receiver_file(
+        "ist_allowlist_rejected_receiver.cache");
+    conf_receiver.set("gcache.name", gcache_receiver_file);
+    conf_receiver.set("gcache.size", "1M");
+    gcache::GCache* gcache_receiver = new gcache::GCache(NULL, conf_receiver,
+                                                         dir);
+
+    std::string receiver_addr("tcp://127.0.0.1:0");
+    wsrep_uuid_t uuid;
+    gu_uuid_generate(reinterpret_cast<gu_uuid_t*>(&uuid), 0, 0);
+
+    mark_point();
+
+    // populate gcache so the donor has something to offer, even though
+    // the connection will be rejected before any of it is sent
+    for (size_t i(1); i <= 10; ++i)
+    {
+        if (i % 3)
+        {
+            store_trx(gcache_sender, lp, trx_params, uuid, i);
+        }
+        else
+        {
+            store_cc(gcache_sender, uuid, i);
+        }
+    }
+
+    mark_point();
+
+    wsrep_allowlist_service_v1_t allowlist_service =
+        { reject_all_allowlist_cb, NULL };
+    ck_assert(gu::init_allowlist_service_v1(&allowlist_service) == 0);
+
+    // receiver_thd (used by the happy-path tests) assumes a completed
+    // transfer and releases gcache up to isth.seqno(), which stays 0 here
+    // since no data is ever received; reuse receiver_thd_interrupted
+    // instead, which makes no such assumption.
+    interrupted_receiver_args rargs(receiver_addr, 1, 10, sp, *gcache_receiver,
+                                    version);
+    sender_args sargs(*gcache_sender, rargs.listen_addr_, 1, 10, version);
+
+    gu_barrier_init(&start_barrier, 0, 2);
+
+    gu_thread_t sender_thread, receiver_thread;
+
+    // The donor's connection gets dropped before any handshake data is
+    // exchanged, so the donor side needs the same tolerant error handling
+    // as the interrupted-donor scenario above.
+    gu_thread_create(NULL, &sender_thread, &sender_thd_interrupted, &sargs);
+    mark_point();
+    usleep(100000);
+    gu_thread_create(NULL, &receiver_thread, &receiver_thd_interrupted, &rargs);
+    mark_point();
+
+    // These joins are the regression guard: before the MDEV-42140 fix the
+    // uncaught gu::Exception from the allowlist check aborted the whole
+    // process (SIGABRT) instead of letting these threads return normally.
+    gu_thread_join(receiver_thread, 0);
+    gu_thread_join(sender_thread, 0);
+
+    mark_point();
+
+    gu::deinit_allowlist_service_v1();
+
+    ck_assert(rargs.finished_seqno_ == WSREP_SEQNO_UNDEFINED);
+
+    delete gcache_sender;
+    delete gcache_receiver;
+
+    mark_point();
+    unlink(gcache_sender_file.c_str());
+    unlink(gcache_receiver_file.c_str());
+}
+
+START_TEST(test_ist_allowlist_rejected_v7)
+{
+    test_ist_allowlist_rejected(7);
+}
+END_TEST
+
 Suite* ist_suite()
 {
     Suite* s  = suite_create("ist");
@@ -808,6 +1118,14 @@ Suite* ist_suite()
     tcase_add_test(tc, test_ist_v10EP);
     tcase_add_test(tc, test_ist_v10EE);
     suite_add_tcase(s, tc);
+    tc = tcase_create("test_ist_interrupted_before_ready_v7");
+    tcase_set_timeout(tc, 60);
+    tcase_add_test(tc, test_ist_interrupted_before_ready_v7);
+    suite_add_tcase(s, tc);
 
+    tc = tcase_create("test_ist_allowlist_rejected_v7");
+    tcase_set_timeout(tc, 60);
+    tcase_add_test(tc, test_ist_allowlist_rejected_v7);
+    suite_add_tcase(s, tc);
     return s;
 }

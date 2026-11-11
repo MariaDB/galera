@@ -42,6 +42,11 @@ void gu_debug_sync_signal(const std::string& sync);
 // Get list of active sync waiters
 std::string gu_debug_sync_waiters();
 
+// Test-only: wake all current waiters on 'sync' without marking them as
+// signalled, to simulate a spurious condition variable wakeup. Used to
+// exercise the predicate loop in gu_debug_sync_wait() deterministically.
+void gu_debug_sync_test_spurious_wakeup(const std::string& sync);
+
 #else
 
 #define GU_DBUG_SYNC_WAIT(_c)

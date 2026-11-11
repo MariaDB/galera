@@ -244,7 +244,7 @@ gcs_state_msg_write (void* buf, const gcs_state_msg_t* state)
 gcs_state_msg_t*
 gcs_state_msg_read (const void* const buf, ssize_t const buf_len)
 {
-    assert (buf_len > 0);
+    if (buf_len <= 0) return NULL;
 
 #ifndef NDEBUG
     char str[1024];
@@ -252,56 +252,76 @@ gcs_state_msg_read (const void* const buf, ssize_t const buf_len)
     gu_debug("Received state message of size %zd\n%s", buf_len, str);
 #endif /* NDEBUG*/
 
+    const char* const begin(static_cast<const char*>(buf));
+    size_t const len(buf_len);
+
     /* beginning of the message is always version 0 */
+    size_t off(6 * sizeof(int8_t) + sizeof(int16_t) + 3 * sizeof(gu_uuid_t) +
+               2 * sizeof(int64_t));
+    if (len <= off) return NULL;
+
     CONST_STATE_MSG_FIELDS_V0(buf);
-    const char* inc_addr = name + strlen (name) + 1;
+    assert(begin + off == name);
 
-    int      appl_proto_ver = 0;
-    uint8_t* appl_ptr = (uint8_t*)(inc_addr + strlen(inc_addr) + 1);
+    /* true if the next n bytes are within the message */
+    auto const fits([&off, len](size_t const n) { return off + n <= len; });
+
+    const char* const name_end(
+        static_cast<const char*>(memchr(name, '\0', len - off)));
+    if (!name_end) return NULL;
+    off = name_end - begin + 1;
+    if (!fits(1)) return NULL;
+
+    const char* const inc_addr(begin + off);
+    const char* const inc_addr_end(
+        static_cast<const char*>(memchr(inc_addr, '\0', len - off)));
+    if (!inc_addr_end) return NULL;
+    off = inc_addr_end - begin + 1;
+
+    int appl_proto_ver = 0;
     if (*version >= 1) {
-        assert(buf_len >= (uint8_t*)(appl_ptr + 1) - (uint8_t*)buf);
-        appl_proto_ver = *appl_ptr;
+        if (!fits(1)) return NULL;
+        appl_proto_ver = uint8_t(begin[off]);
     }
-
-    int64_t  cached = GCS_SEQNO_ILL;
-    int64_t* cached_ptr = (int64_t*)(appl_ptr + 1);
+    off += 1;
+// v3 stuff
+    int64_t cached = GCS_SEQNO_ILL;
     if (*version >= 3) {
-        assert(buf_len >= (uint8_t*)(cached_ptr + 1) - (uint8_t*)buf);
-        gu::unserialize8(cached_ptr, 0, cached);
+        if (!fits(8)) return NULL;
+        gu::unserialize8(begin, off, cached);
     }
+    off += 8;
 // v4 stuff
-    int32_t  desync_count = 0;
-    int32_t* desync_count_ptr = (int32_t*)(cached_ptr + 1);
+    int32_t desync_count = 0;
     if (*version >= 4) {
-        assert(buf_len >= (uint8_t*)(desync_count_ptr + 1) - (uint8_t*)buf);
-        gu::unserialize4(desync_count_ptr, 0, desync_count);
+        if (!fits(4)) return NULL;
+        gu::unserialize4(begin, off, desync_count);
     }
-// v5 stuff
+    off += 4;
+// v5 stuff, always present, used since gcs protocol 2
     int64_t last_applied = 0;
     int64_t vote_seqno   = 0;
     int64_t vote_res     = 0;
     uint8_t vote_policy  = GCS_VOTE_ZERO_WINS; // backward compatibility
-    int64_t* last_applied_ptr = (int64_t*)(desync_count_ptr + 1);
-    if (*version >= 5 && *gcs_proto_ver >= 2) {
-        assert(buf_len > (uint8_t*)(last_applied_ptr + 3) - (uint8_t*)buf);
-        gu::unserialize8(last_applied_ptr, 0, last_applied);
-
-        gu::unserialize8(last_applied_ptr + 1, 0, vote_seqno);
-        gu::unserialize8(last_applied_ptr + 2, 0, vote_res);
-        gu::unserialize1(last_applied_ptr + 3, 0, vote_policy);
+    if (*version >= 5) {
+        if (!fits(3 * 8 + 1)) return NULL;
+        if (*gcs_proto_ver >= 2) {
+            gu::unserialize8(begin, off,      last_applied);
+            gu::unserialize8(begin, off + 8,  vote_seqno);
+            gu::unserialize8(begin, off + 16, vote_res);
+            gu::unserialize1(begin, off + 24, vote_policy);
+        }
     }
+    off += 3 * 8 + 1;
 // v6 stuff
-    uint8_t prim_gcs_ver   = 0;
-    uint8_t* prim_gcs_ptr  = (uint8_t*)(last_applied_ptr + 3) + 1;
-    uint8_t prim_repl_ver  = 0;
-    uint8_t* prim_repl_ptr = (uint8_t*)(prim_gcs_ptr + 1);
-    uint8_t prim_appl_ver  = 0;
-    uint8_t* prim_appl_ptr = (uint8_t*)(prim_repl_ptr + 1);
+    uint8_t prim_gcs_ver  = 0;
+    uint8_t prim_repl_ver = 0;
+    uint8_t prim_appl_ver = 0;
     if (*version >= 6) {
-        assert(buf_len >= (uint8_t*)(prim_appl_ptr + 1) - (uint8_t*)buf);
-        prim_gcs_ver    = *prim_gcs_ptr;
-        prim_repl_ver   = *prim_repl_ptr;
-        prim_appl_ver   = *prim_appl_ptr;
+        if (!fits(3)) return NULL;
+        prim_gcs_ver  = begin[off];
+        prim_repl_ver = begin[off + 1];
+        prim_appl_ver = begin[off + 2];
     }
 
     gcs_state_msg_t* ret = gcs_state_msg_create (
