@@ -102,18 +102,12 @@ BuildRequires: libstdc++6
 BuildRequires: gcc-c++
 %endif
 
-%if %{defined fedora}
-BuildRequires: python
-%endif
-
 # Systemd
 %bcond_without systemd
 
 %if %{with systemd}
 %systemd_requires
 %endif
-
-Requires:      openssl
 
 Provides:      wsrep, %{name} = %{version}-%{release}
 
