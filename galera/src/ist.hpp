@@ -79,6 +79,14 @@ namespace galera
             wsrep_seqno_t finished();
             void          run();
 
+            // Wake up a receiver thread that may still be waiting in
+            // run() for ready() to be called (e.g. the state transfer
+            // negotiation is being abandoned before completing). Safe to
+            // call from any thread, any number of times, independently of
+            // finished(): unlike finished(), it never touches the receiver
+            // thread handle or recv_addr_, so it cannot race with it.
+            void          interrupt_wait();
+
             wsrep_seqno_t first_seqno() const { return first_seqno_; }
 
             // public for unit tests
@@ -86,7 +94,7 @@ namespace galera
             static const std::string& conf_bind_addr_key();
 
         private:
-            void interrupt();
+            void interrupt_stream();
 
             std::string                                   recv_addr_;
             gu::AsioIoService                             io_service_;
@@ -109,6 +117,7 @@ namespace galera
             bool                  use_ssl_;
             bool                  running_;
             bool                  ready_;
+            bool                  interrupted_;
 
             // GCC 4.8.5 on FreeBSD wants this
             Receiver(const Receiver&);

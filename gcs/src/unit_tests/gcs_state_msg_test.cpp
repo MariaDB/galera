@@ -5,8 +5,11 @@
 #define GCS_STATE_MSG_ACCESS
 #include "../gcs_state_msg.hpp"
 
+#include "gcs_test_utils.hpp"
 #include "gcs_state_msg_test.hpp" // must be included last
 #include "gu_inttypes.hpp"
+
+#include <vector>
 
 static int const QUORUM_VERSION = 6;
 
@@ -854,6 +857,89 @@ START_TEST (gcs_state_msg_test_v5v6_upgrade)
 }
 END_TEST
 
+/* Every message shorter than the minimum length of its version must be
+ * rejected without reading past the end of the buffer. */
+START_TEST (gcs_state_msg_test_truncated)
+{
+    gu_uuid_t uuid;
+    gu_uuid_generate(&uuid, NULL, 0);
+
+    const char* const name("node");
+    const char* const inc_addr("192.168.0.1:3306");
+
+    gcs_state_msg_t* const send_state(
+        gcs_state_msg_create(&uuid, &uuid, &uuid, 1, 2, 3, 4, 5, 6,
+                             GCS_VOTE_ZERO_WINS, 7,
+                             GCS_NODE_STATE_SYNCED, GCS_NODE_STATE_SYNCED,
+                             name, inc_addr, 2, 10, 4, 2, 10, 4, 0, 0));
+    ck_assert(NULL != send_state);
+
+    ssize_t const full_len(gcs_state_msg_len(send_state));
+    ck_assert(full_len > 0);
+    std::vector<uint8_t> msg(full_len);
+    ck_assert(full_len == gcs_state_msg_write(msg.data(), send_state));
+    gcs_state_msg_destroy(send_state);
+
+    /* Wire layout is stated here independently of the reader. A layout
+     * change fails the full_len check below. */
+    size_t const v0_hdr(72); // fixed v0 fields before name
+
+    /* minimum message length of each version */
+    size_t const v0_len(v0_hdr + strlen(name) + 1 + strlen(inc_addr) + 1);
+    size_t const min_len[] = {
+        v0_len,                     // v0
+        v0_len + 1,                 // v1: appl_proto_ver
+        v0_len + 1,                 // v2
+        v0_len + 1 + 8,             // v3: cached
+        v0_len + 1 + 8 + 4,         // v4: desync_count
+        v0_len + 1 + 8 + 4 + 25,    // v5: last_applied, vote
+        v0_len + 1 + 8 + 4 + 25 + 3 // v6: prim versions
+    };
+    ck_assert(size_t(full_len) == min_len[6]);
+
+    /* message fields are read in place, the buffer must be aligned */
+    gcs_test::GuardedBuf guard;
+
+    /* v5 fields are present also when they are not used */
+    for (int const pv : { 1, 2 })
+    {
+        msg[2] = pv; // gcs_proto_ver
+
+        for (int v(0); v <= 6; ++v)
+        {
+            msg[0] = v;
+
+            for (size_t len(0); len <= min_len[v]; ++len)
+            {
+                gcs_state_msg_t* const st(
+                    gcs_state_msg_read(guard.place(msg.data(), len, 8), len));
+
+                if (len < min_len[v])
+                {
+                    ck_assert_msg(NULL == st,
+                                  "pv%d v%d: accepted %zu bytes out of %zu",
+                                  pv, v, len, min_len[v]);
+                }
+                else
+                {
+                    ck_assert_msg(NULL != st, "pv%d v%d: rejected %zu bytes",
+                                  pv, v, len);
+                    ck_assert(!strcmp(name, gcs_state_msg_name(st)));
+                    gcs_state_msg_destroy(st);
+                }
+            }
+        }
+    }
+
+    /* name and inc_addr not terminated within the buffer */
+    std::vector<uint8_t> unterminated(msg);
+    memset(unterminated.data() + v0_hdr, 'a', unterminated.size() - v0_hdr);
+    ck_assert(NULL == gcs_state_msg_read(
+                  guard.place(unterminated.data(), unterminated.size(), 8),
+                  unterminated.size()));
+}
+END_TEST
+
 Suite *gcs_state_msg_suite(void)
 {
   Suite *s  = suite_create("GCS state message");
@@ -864,6 +950,7 @@ Suite *gcs_state_msg_suite(void)
 
   suite_add_tcase (s, tc_basic);
   tcase_add_test  (tc_basic, gcs_state_msg_test_basic);
+  tcase_add_test  (tc_basic, gcs_state_msg_test_truncated);
 
   suite_add_tcase (s, tc_inherit);
   tcase_add_test  (tc_inherit, gcs_state_msg_test_quorum_inherit);
