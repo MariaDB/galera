@@ -248,11 +248,11 @@ int gu_barrier_init_SYS (gu_barrier_t_SYS *barrier,
         errno = EINVAL;
         return -1;
     }
-    if(gu_mutex_init_SYS (&barrier->mutex, 0) < 0)
+    if(gu_mutex_init_SYS (NULL, &barrier->mutex) < 0)
     {
         return -1;
     }
-    if(gu_cond_init_SYS (&barrier->cond, 0) < 0)
+    if(gu_cond_init_SYS (NULL, &barrier->cond) < 0)
     {
         gu_mutex_destroy_SYS (&barrier->mutex);
         return -1;
@@ -279,13 +279,13 @@ int gu_barrier_wait_SYS (gu_barrier_t_SYS *barrier)
         barrier->count = 0;
         gu_cond_broadcast_SYS (&barrier->cond);
         gu_mutex_unlock_SYS (&barrier->mutex);
-        return GU_BARRIER_THREAD_SYS;
+        return GU_BARRIER_SERIAL_THREAD_SYS;
     }
     else
     {
         gu_cond_wait_SYS (&barrier->cond, &(barrier->mutex));
         gu_mutex_unlock_SYS (&barrier->mutex);
-        return !GU_BARRIER_THREAD_SYS;
+        return !GU_BARRIER_SERIAL_THREAD_SYS;
     }
 }
 
