@@ -113,8 +113,6 @@ BuildRequires: python
 %systemd_requires
 %endif
 
-Requires:      openssl
-
 Provides:      wsrep, %{name} = %{version}-%{release}
 
 Obsoletes: galera-3
