@@ -102,10 +102,6 @@ BuildRequires: libstdc++6
 BuildRequires: gcc-c++
 %endif
 
-%if %{defined fedora}
-BuildRequires: python
-%endif
-
 # Systemd
 %bcond_without systemd
 
